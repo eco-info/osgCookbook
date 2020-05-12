@@ -1,0 +1,29 @@
+osgTerrain::TerrainTile {
+  nodeMask 0xffffffff
+  cullingActive TRUE
+  BlendingPolicy INHERIT
+  ElevationLayer {
+    osgTerrain::CompositeLayer {
+      file BRalt.tif
+      MinFilter LINEAR_MIPMAP_LINEAR
+      MagFilter LINEAR
+    }
+  }
+  ColorLayer {
+    osgTerrain::CompositeLayer {
+      file br.png
+      MinFilter LINEAR_MIPMAP_LINEAR
+      MagFilter LINEAR
+    }
+  }
+  vpb::DatabaseBuilder {
+    vpb::BuildOptions {
+      Directory "terreno1/"
+      DestinationTileBaseName "BR"
+      VerticalScale 0.00499999988824129
+      DestinationExtents -74.0044631958008 -33.8666648864746 -34.7999992370605 5.33779621124268
+      MaximumNumOfLevels 6
+      DistributedBuildSplitLevel 2
+    }
+  }
+}
