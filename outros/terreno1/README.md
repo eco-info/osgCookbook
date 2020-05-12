@@ -4,6 +4,10 @@ Primeiro terreno controlado por mouse e teclado.
 
 A tela pode variar entre tela-cheia e janela, comentando ou não a linha 211 (viewer.setUpViewInWindow).
 
+![](terr1a.png)
+
+![](terr1b.png)
+
 ## Prioridade 1
 
 ### Não trancar o mouse nas bordas da janela.
