@@ -26,39 +26,53 @@ A função `calcAcc` calcula a aceleração, usando as variáveis velX, velY e v
 
 ### Acrescentar HUD (heads-up display)
 
-HUD com texto simples, no canto inferior esquerdo, indicando o ângulo da câmera (Heading e Pitch) e sua posição (Lat, Lon e Alt). Detalhe: o mapa já vem georreferenciado do GDAL, por isso Lat e Lon são obtidas diretamente do `osg::Vec3d eyePos`. Alt está na mesma escala (graus), e será depois corrigido para quilômetros.
+HUD com texto simples, no canto superior esquerdo, indicando a posição da câmera (lat:lon:alt) e seu ângulo (H/P = Heading/Pitch -- Heading será usado na bússola). Detalhe: o mapa já vem georreferenciado do GDAL, por isso Lat e Lon são obtidas diretamente do `osg::Vec3d eyePos`. Alt está na mesma escala (graus, porém modificado pelo parâmetro -v do vpbbuilder), e será depois corrigido para metros. O HUD também apresenta um cursor central amarelo, enquanto o mouse está preso à câmera. O mouse pode ser liberado/preso novamente com a tecla Tab, mostrando/escondendo o cursor.
 
-![](terr1c.png)
-
-## Prioridade 1
+![](terr1d.png)
 
 ### Não trancar o mouse nas bordas da janela.
 
-Tentativa:
+Em `OVNIController::handleMouseMove`, verifico se o cursor do mouse se aproximou da beira da janela (10% da largura ou altura). Neste caso, o desloco (`aa.requestWarpPointer`) para a beira oposta, mas numa distância maior (20%), impedindo que o processo aconteça repetidas vezes caso o mouse se mova paralelo à beira bem na faixa dos 10%.
 
-- `centerMousePointer( ea, aa );`
-- `if (_ga_t0->getX() == windowW/2 && _ga_t0->getY() == windowH/2) return false;`
-
-Problema: Perda significativa de desempenho. Dizem que há uma maneira de jogar o cursor do mouse para o centro da janela a cada frame, sem chamar as funções `handle` e `performMovement`, mas ainda não encontrei.
+A função `requestWarpPointer` chama automaticamente a função `performMovement`, o que não consegui evitar. Mas com uma combinação das variáveis booleanas globais `mouseFree` e `Warping`, consegui resolver o problema de desempenho observado anteriormente.
 
 ### Esconder o cursor.
 
-Solução:
-
-- `window->useCursor(false);`
-- `window->setCursor(osgViewer::GraphicsWindow::NoCursor);`
-
-Dúvida: não sei qual a diferença entre essas duas linhas. Aparentemente fazem a mesma coisa. Serão aplicadas quando for resolvida a pendência anterior (não trancar o mouse nas bordas da janela).
+Usei `window->useCursor(false);` e ignorei `window->setCursor(osgViewer::GraphicsWindow::NoCursor);` (ainda não sei a diferença).
 
 ### Colocar a câmera inicial no alto, centralizada sobre o país, de forma que o mesmo caiba inteiro na tela (com o norte ou o sul pra cima, dependendo da configuração).
 
+Feito com apenas duas linhas. Por enquanto apenas Norte para cima.
+
+```
+osg::Quat quad0;
+controller->setTransformation(osg::Vec3(-54.4f,-14.2666667f,80.0f), quad0 ); // camLon (-74-34.8)/2 = -54.4, camLat (5.3333333-33.8666667)/2 = -14.2666667, camAlt = 80
+```
+
+As coordenadas de cálculo são os limites do mapa do Brasil.
+
+### Acrescentar ao HUD as coordenadas do ponto onde o mouse (ou o + no centro da tela) aponta
+
+Feito com a função `pick` encontrada em <osg>/examples/osgpick/osgpick.cpp, linha 102.
+
+![](terr1e.png)
+
+### Usar tecla Tab (alguma outra?) para alternar mouse entre navegação (MODO A: girar câmera, cursor invisível) e movimento do cursor (MODO B: câmera parada, cursor visível)
+
+## Prioridade 1
+
+- Altitude mínima paralela ao terreno (usar ray-cast -- pick -- vertical)
+- Mudar a posição do Sol segundo horário e estação do ano
+- Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
+- Inserir shapefiles
+- Modificar a textura do mapa dinamicamente
+- Mudar de país dinamicamente, criando mapa do vpbmaster de dentro do programa e calculando corretamente altitude, etc.
+
 ## Prioridade 2
 
-- Acrescentar ao HUD as coordenadas do ponto onde o mouse (ou o + no centro da tela) aponta
 - Usar teclas PageUp para ganhar altitude, e PageDown para perder altitude
 - Usar teclas Shift para acelerar
-- Usar tecla Tab (alguma outra?) para alternar mouse entre navegação (MODO A: girar câmera, cursor invisível) e movimento do cursor (MODO B: câmera parada, cursor visível)
+- Usar botão direito do mouse (?) para navegar na mesma altitude
 - MODO B: identificar elementos da geografia, com nomes no HUD
-- Usar teclas QE para girar ao redor do eixo vertical (do mundo, não da câmera -- pois não há roll). Embora os movimentos horizontais do mouse já façam isso, pode fazer mais rápido, e também pode ser útil no MODO B)
-- Mudar a posição do Sol segundo horário e estação do ano
-- Inserir shapefiles
+- Usar teclas QE para girar ao redor do eixo vertical (do mundo, não da câmera -- pois não há roll). Embora os movimentos horizontais do mouse já façam isso, pode fazer mais rápido, e também pode ser útil no MODO B
+- Usar outras fontes no HUD
