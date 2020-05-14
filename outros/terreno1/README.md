@@ -26,7 +26,7 @@ A função `calcAcc` calcula a aceleração, usando as variáveis velX, velY e v
 
 ### Acrescentar HUD (heads-up display)
 
-HUD com texto simples, no canto superior esquerdo, indicando a posição da câmera (lat:lon:alt) e seu ângulo (H/P = Heading/Pitch -- Heading será usado na bússola). Detalhe: o mapa já vem georreferenciado do GDAL, por isso Lat e Lon são obtidas diretamente do `osg::Vec3d eyePos`. Alt está na mesma escala (graus, porém modificado pelo parâmetro -v do vpbbuilder), e será depois corrigido para metros. O HUD também apresenta um cursor central amarelo, enquanto o mouse está preso à câmera. O mouse pode ser liberado/preso novamente com a tecla Tab, mostrando/escondendo o cursor.
+HUD com texto simples, no canto superior esquerdo, indicando a posição da câmera (lat:lon:alt) e seu ângulo (H/P = Heading/Pitch -- Heading será usado na bússola). Detalhe: o mapa já vem georreferenciado do GDAL, por isso Lat e Lon são obtidas diretamente do `osg::Vec3d eyePos`. Alt está na mesma escala (graus, porém modificado pelo parâmetro -v do vpbmaster), e será depois corrigido para metros. O HUD também apresenta um cursor central amarelo, enquanto o mouse está preso à câmera. O mouse pode ser liberado/preso novamente com a tecla Tab, mostrando/escondendo o cursor.
 
 ![](terr1d.png)
 
@@ -59,12 +59,40 @@ Feito com a função `pick` encontrada em <osg>/examples/osgpick/osgpick.cpp, li
 
 ### Usar tecla Tab (alguma outra?) para alternar mouse entre navegação (MODO A: girar câmera, cursor invisível) e movimento do cursor (MODO B: câmera parada, cursor visível)
 
+Alterna entre a exibição do cursor do mouse e o cursor em cruz amarela no centro da tela (`OVNIController::handle, ea.getKey() == 65289`). Também mostra um menu translúcido (ainda sem botões) quando o cursor do mouse está visível.
+
+### Altitude mínima paralela ao terreno (usar ray-cast -- pick -- vertical)
+
+Feito com a função `pickDown`, a partir de um exemplo em `src/osgUtil/LineSegmentIntersector.cpp`. Agora a câmera pode "caminhar" sobre o terreno, acompanhando o relevo.
+
+### Desenhar bússola (a partir do Heading) (removível)
+
+A bússola (canto inferior direito) acompanha o ângulo da câmera. Diferentes imagens podem ser escolhidas. Pode ser escondida/mostrada com a tecla 'b'.
+
+![](terr1f1.png)
+
+![](terr1f2.png)
+
+## Tentativa
+
+### Inserir shapefiles
+
+Ler as coordenadas de um arquivo de shapefile (ESRI) não ocupa muito código (~ 200 linhas). Um shapefile bastante detalhado dos estados brasileiros tem 19.481 pontos (em 314 kB), e pode ser visto nas imagens abaixo, disposto a uma distância "segura" do solo.
+
+![](terr1g1.png)
+
+![](terr1g2.png)
+
+Calcular a altitude de cada ponto para desenhá-los junto ao chão leva cerca de 2 segundos, numa máquina relativamente possante. Para o objetivo desse projeto (rodar em máquinas fracas) o tempo será consideravelmente maior. E ainda não é uma solução eficaz, pois o relevo pode mudar entre dois pontos vizinhos, deixando parte da linha "soterrada", como na figura abaixo.
+
+![](terr1g3.png)
+
+Pelas razões expostas, shapefiles podem até ser úteis de outra forma, mas não para mostrar as UFs do país. Para isso, algo que modifique a textura (como uma sombra, um decalque, uma projeção) deverá funcionar melhor. A imagem para isso poderá ser gerada do mesmo shapefile, até mesmo (talvez) em tempo real (caso contrário, pode ser gerada na inicialização do jogo ou vir com o pacote de instalação).
+
 ## Prioridade 1
 
-- Altitude mínima paralela ao terreno (usar ray-cast -- pick -- vertical)
 - Mudar a posição do Sol segundo horário e estação do ano
 - Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
-- Inserir shapefiles
 - Modificar a textura do mapa dinamicamente
 - Mudar de país dinamicamente, criando mapa do vpbmaster de dentro do programa e calculando corretamente altitude, etc.
 
