@@ -89,9 +89,34 @@ Calcular a altitude de cada ponto para desenhá-los junto ao chão leva cerca de
 
 Pelas razões expostas, shapefiles podem até ser úteis de outra forma, mas não para mostrar as UFs do país. Para isso, algo que modifique a textura (como uma sombra, um decalque, uma projeção) deverá funcionar melhor. A imagem para isso poderá ser gerada do mesmo shapefile, até mesmo (talvez) em tempo real (caso contrário, pode ser gerada na inicialização do jogo ou vir com o pacote de instalação).
 
+### Mudar a posição do Sol segundo horário e estação do ano
+
+As teclas L e O giram o Sol para Leste e Oeste. K e I giram para Sul e Norte. Não consegui fazer com que a mudança da direção da *luz direcional* funcionasse, por isso estou usando *luz pontual*. Ângulos muito baixos destacam ainda mais a "costura" entre as *tiles* do terreno, o que é péssimo.
+
+![](terr1h1.jpg)
+
+![](terr1h2.jpg)
+
+### Inserir blocos e identificá-los com o mouse
+
+A barra de espaço é usada para inserir cubos vermelhos, cujo movimento inicial é na direção em que a câmera aponta. A partir daí cada cubo cai simulando um movimento de queda livre, parando no solo. O cursor central pode ser usado para identificar os cubos. Apertando tab para liberar o mouse, o cursor móvel também pode ser usado para identificá-los.
+
+Um cubo sendo lançado do alto. Repare seu tamanho maior que os outros dois, à esquerda, indicando que ainda não chegou ao chão.
+
+![](terr1i1.jpg)
+
+Um dos cubos sendo identificado com o mouse, destacado em branco. Seu nome aparece no painel, no alto da tela.
+
+![](terr1i2.jpg)
+
+A ideia é dominar essas técnicas para acrescentar e manipular tipos variados de objetos sobre o terreno. Os próximos passos são:
+
+- Arrastar os cubos com o mouse
+- Dar nome a cada cubo
+
 ## Prioridade 1
 
-- Mudar a posição do Sol segundo horário e estação do ano
+- Compilar estaticamente para testar em outras máquinas, onde o OSG não esteja instalado.
 - Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
 - Modificar a textura do mapa dinamicamente
 - Mudar de país dinamicamente, criando mapa do vpbmaster de dentro do programa e calculando corretamente altitude, etc.
