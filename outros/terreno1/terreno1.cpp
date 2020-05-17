@@ -18,6 +18,8 @@
  - Inserir objetos 3d (podem representar grandes obras, problemas a resolver, etc) (definir a escala)
  - desenhar shapefiles (ok, mas não serve pra UFs)
  . Identificar os objetos 3d com o mouse
+ . Mover os objetos 3d
+ * Mostrar nomes das localidades
  * Dar nome aos objetos 3d dentro do jogo (osgWidget::Input?)
  * UFs com decalque, overlay, shaders, mudança da textura... ?
  * Mudar o tamanho da janela dentro do jogo
@@ -49,9 +51,10 @@
 #include <osgDB/ReadFile>
 #include <osgFX/Outline>
 #include <osgGA/FirstPersonManipulator>
-#include <osgSim/OverlayNode>
+//#include <osgSim/OverlayNode>
 #include <osgText/Text>
 #include <osgUtil/LineSegmentIntersector>
+//#include <osgUtil/PrintVisitor>
 #include <osgViewer/Viewer>
 #include <sys/stat.h>
 
@@ -97,6 +100,8 @@ public:
 	virtual bool handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAdapter &);
 	virtual std::string pick(osgViewer::View* view, const osgGA::GUIEventAdapter& ea);
 	virtual float pickDown( osg::Vec3d pos );
+	virtual bool handleMousePush( const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& us );
+	virtual bool handleMouseRelease( const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& us );
 	virtual bool performMovement();
 	virtual bool handleMouseMove( const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapter& us );
 protected:
@@ -118,7 +123,7 @@ osg::Vec3d camSpeed;
 float velX=0, velY=0, velZ=0, velSol=0.01;	// XYZ: velocidades lateral, vertical e frontal
 float camAlt = 0, camLat = 0, camLon = 0, ptrAlt = 0, ptrLat = 0, ptrLon = 0;
 bool keyW=false, keyA=false, keyS=false, keyD=false, keyR=false, keyF=false, keyL=false, keyO=false, keyK=false, keyI=false;
-bool Homing = false, mouseFree = false, Warping = false, mostraBussola = true;
+bool Homing=false, mouseFree=false, Warping=false, mostraBussola=true, movendoBox=false;
 const float inputTimeInterval = 0.02;
 double maxTick = inputTimeInterval;
 int windowX, windowY, windowW, windowH;
@@ -129,7 +134,8 @@ osg::ref_ptr<osg::Geode> crossGeode;
 osg::ref_ptr<osg::PositionAttitudeTransform> bussola;
 osg::ref_ptr<osg::PositionAttitudeTransform> menu;
 osg::ref_ptr<osg::Group> blocos;
-osg::ref_ptr<osg::Geometry> escondido = nullptr;
+osg::Geode* selecionado = nullptr;
+//osgUtil::PrintVisitor pv( std::cout );
 
 osg::Vec3d fromQuat(const osg::Quat& quat, bool degrees)
 {
@@ -165,46 +171,43 @@ osg::Vec3d fromQuat(const osg::Quat& quat, bool degrees)
 	return osg::Vec3d(heading, pitch, 0); // (não usa roll)
 }
 
-void criaBloco( osg::Quat camRotation )
+void criaBloco( osg::Quat camRotation ) // ver examples/osgscribe/osgscribe.cpp para exemplos de linhas sobre superfícies
 {
 	osg::ref_ptr<osg::ShapeDrawable> shape = new osg::ShapeDrawable( new osg::Box );
 	shape->setDataVariance( osg::Object::DYNAMIC );
+	shape->setColor( osg::Vec4(1,0,0,1) ); // vermelho
+	//shape->getOrCreateStateSet()->setMode( GL_BLEND, osg::StateAttribute::ON ); // deixa translúcido
 	shape->setUseDisplayList( false );
 	shape->setName( "Box " + std::to_string( blocos->getNumChildren() ) );
 
 	osg::ref_ptr<osg::Geode> geode = new osg::Geode;
-	geode->addDrawable( shape.get() );
 	osg::Vec3 hpr = fromQuat(camRotation,false); // ângulos da câmera, em radianos
-	// hpr.x() = heading
+	// hpr.x() = heading , hpr.y = pitch
 	geode->setUserValue( "speed", osg::Vec3d(-0.1*sin(hpr.x())*sin(hpr.y()),0.1*cos(hpr.x())*sin(hpr.y()),-0.005) ); // velocidade "pra frente" (câmera) e pra baixo (gravidade)
-	geode->setName( "Bloco " + std::to_string( blocos->getNumChildren() ) );
-
-	osg::ref_ptr<osg::Geometry> gaiola = new osg::Geometry;
-	gaiola = dynamic_cast<osg::Geometry*>( shape->clone(osg::CopyOp::DEEP_COPY_SHAPES) ); // gaiola branca que aprece quando o cubo é selecionado
-	gaiola->setName( "Gaiola " + std::to_string( blocos->getNumChildren() ) );
-	osg::Vec3Array *vertices = new osg::Vec3Array;
-	vertices = dynamic_cast<osg::Vec3Array*>(gaiola->getVertexArray());
-	geode->addChild( gaiola );
-
-	osg::Vec4Array* colors = new osg::Vec4Array;
-	colors->push_back(osg::Vec4(1,0,0,0.5)); // 0.5 = translúcido, se usar GL_BLEND abaixo
-	shape->setColorArray(colors, osg::Array::BIND_OVERALL);
-	// shape->getOrCreateStateSet()->setMode( GL_BLEND, osg::StateAttribute::ON ); // deixa translúcido
+	geode->setName( "GeodeBox " + std::to_string( blocos->getNumChildren() ) );
+	geode->addChild( shape );
 
 	osg::ref_ptr<osg::MatrixTransform> trans = new osg::MatrixTransform;
-
 	trans->setMatrix( osg::Matrix::scale( 0.1, 0.1, 0.1 ) *
 						osg::Matrix::translate( osg::Vec3(camLon, camLat, camAlt)+camRotation*osg::Vec3(0,0,-1) ) ); // posição: -1 = distância à frente da câmera
 	trans->getOrCreateStateSet()->setMode( GL_NORMALIZE, osg::StateAttribute::ON );
 	trans->getOrCreateStateSet()->setAttributeAndModes( new osg::PolygonMode(osg::PolygonMode::FRONT_AND_BACK, osg::PolygonMode::LINE) );
 	trans->getOrCreateStateSet()->setMode( GL_LIGHTING, osg::StateAttribute::OFF );
-
+	trans->setName("MatrTransfBox " + std::to_string( blocos->getNumChildren() ) );
 	trans->addChild( geode );
+
 	blocos->addChild( trans );
+	//blocos->accept( pv );
 }
 
 bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAdapter &aa)
 {
+	if( ea.getEventType() == osgGA::GUIEventAdapter::PUSH )
+		return handleMousePush( ea, aa );
+	else
+	if( ea.getEventType() == osgGA::GUIEventAdapter::RELEASE )
+		return handleMouseRelease( ea, aa );
+	else
 	if( ea.getEventType() == osgGA::GUIEventAdapter::MOVE ||
 		ea.getEventType() == osgGA::GUIEventAdapter::DRAG)
 		return handleMouseMove( ea, aa ); // barra de espaços parou de levar pra coordenada inicial anterior
@@ -372,56 +375,89 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 	osgUtil::LineSegmentIntersector::Intersections intersections;
 	if (view->computeIntersections(ea,intersections))
 	{
-		osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
 		std::stringstream ptrX, ptrY, ptrZ;
-		ptrLat = hitr->getWorldIntersectPoint().y();
-		ptrLon = hitr->getWorldIntersectPoint().x();
-		ptrAlt = hitr->getWorldIntersectPoint().z();
-		ptrX << std::fixed << std::setprecision(1) << ptrLon;
-		ptrY << std::fixed << std::setprecision(1) << ptrLat;
-		ptrZ << std::fixed << std::setprecision(2) << ptrAlt;
-		osg::NodePath path = hitr->nodePath;
-		bool achou = false;
-		std::string nome = "";
-		for( osg::NodePath::const_iterator hitNode = path.begin(); hitNode != path.end(); ++hitNode)
+		if( movendoBox && selecionado ) // arrastando algum Box (não precisa do "selecionado", mas por segurança...)
 		{
-			if( strcmp( (*hitNode)->className(),"Geode" ) == 0 || strcmp( (*hitNode)->className(),"Terrain" ) == 0 )
+			for(osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
+				hitr != intersections.end();
+				++hitr)
 			{
-				nome = (*hitNode)->getName();
-				achou = true;
-				if ( strcmp( (*hitNode)->className(),"Geode" ) == 0 )
+				if( strcmp( hitr->drawable->className(),"Geometry" ) == 0 ) // terreno
 				{
-					if( escondido == nullptr )
+					osg::MatrixTransform* mtxTr = dynamic_cast<osg::MatrixTransform*>(selecionado->asNode()->getParent(0));
+					if( mtxTr )
 					{
-						(*hitNode)->asGroup()->getChild(0)->setNodeMask(0); // esconde o objeto
-						escondido = (*hitNode)->asGroup()->getChild(0)->asGeometry();
+						osg::Vec3d pos = hitr->getWorldIntersectPoint();
+						ptrX << std::fixed << std::setprecision(1) << pos.x();
+						ptrY << std::fixed << std::setprecision(1) << pos.y();
+						ptrZ << std::fixed << std::setprecision(2) << pos.z();
+						pos.z() += 0.05;
+						mtxTr->setMatrix( osg::Matrix::scale( 0.1, 0.1, 0.1 ) * osg::Matrix::translate( pos ) );
+						return "Movendo para lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str();
 					}
-					else
+				}
+			}
+			return "";
+		}
+		else // não está arrastando nenhum Box
+		{
+			osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
+			ptrLat = hitr->getWorldIntersectPoint().y();
+			ptrLon = hitr->getWorldIntersectPoint().x();
+			ptrAlt = hitr->getWorldIntersectPoint().z();
+			ptrX << std::fixed << std::setprecision(1) << ptrLon;
+			ptrY << std::fixed << std::setprecision(1) << ptrLat;
+			ptrZ << std::fixed << std::setprecision(2) << ptrAlt;
+			osg::NodePath path = hitr->nodePath;
+			bool achou = false;
+			std::string nome = "";
+			for( osg::NodePath::const_iterator hitNode = path.begin(); hitNode != path.end(); ++hitNode)
+			{
+				if( strcmp( (*hitNode)->className(),"Geode" ) == 0 || strcmp( (*hitNode)->className(),"Terrain" ) == 0 )
+				{
+					nome = (*hitNode)->getName();
+					achou = true;
+					osg::ShapeDrawable* shpDrb;
+					if ( strcmp( (*hitNode)->className(),"Geode" ) == 0 )
 					{
-						//std::cout << escondido->getName() << "|" << (*hitNode)->asGroup()->getChild(0)->getName() << "\n"; objeto "Box"
-						if( escondido->getName().compare( (*hitNode)->asGroup()->getChild(0)->getName() ) != 0 )
+						shpDrb = dynamic_cast<osg::ShapeDrawable*>((*hitNode)->asGroup()->getChild(0));
+						if( selecionado == nullptr )
 						{
-							(*hitNode)->asGroup()->getChild(0)->setNodeMask(0); // esconde o objeto
-							escondido->setNodeMask(1); // mostra o anterior
-							escondido = (*hitNode)->asGroup()->getChild(0)->asGeometry();
+							if (shpDrb)
+								shpDrb->setColor( osg::Vec4(1,1,1,1) );
+							selecionado = (*hitNode)->asGeode();
+						}
+						else
+						{
+							if( selecionado->getName().compare( (*hitNode)->getName() ) != 0 )
+							{
+								if (shpDrb)
+									shpDrb->setColor( osg::Vec4(1,1,1,1) );
+								shpDrb = dynamic_cast<osg::ShapeDrawable*>(selecionado->asGroup()->getChild(0));
+								if (shpDrb)
+									shpDrb->setColor( osg::Vec4(1,0,0,1) );
+								selecionado = (*hitNode)->asGeode();
+							}
 						}
 					}
-				}
-				else // Terrain
-				{
-					if( escondido != nullptr)
+					else // Terrain
 					{
-						escondido->setNodeMask(1);
-						escondido = nullptr;
+						if( selecionado != nullptr)
+						{
+							shpDrb = dynamic_cast<osg::ShapeDrawable*>(selecionado->asGroup()->getChild(0));
+							if (shpDrb)
+								shpDrb->setColor( osg::Vec4(1,0,0,1) );
+							selecionado = nullptr;
+						}
 					}
+					break;
 				}
-				break;
 			}
+			if( achou )
+				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nome;
+			else
+				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str();
 		}
-		if( achou )
-			return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nome;
-		else
-			return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str();
 	}
 	else
 		return "";
@@ -454,10 +490,50 @@ float OVNIController::pickDown( osg::Vec3d pos ) // retorna altitude do terreno 
 		return -1;
 }
 
+// apertou o botão do mouse
+bool OVNIController::handleMousePush(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAdapter &aa)
+{
+    flushMouseEventStack();
+	addMouseEvent( ea );
+	unsigned int buttonMask = _ga_t0->getButtonMask();
+	if( selecionado && mouseFree )
+	{
+		osg::ShapeDrawable* shpDrb = dynamic_cast<osg::ShapeDrawable*>(selecionado->getChild(0));
+		if (shpDrb)
+		{
+			if( buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON )
+			{
+				shpDrb->setColor( osg::Vec4(1,1,0,1) ); // amarelo
+				movendoBox = true;
+			}
+		}
+	}
+	return false;
+}
+
+// soltou o botão do mouse
+bool OVNIController::handleMouseRelease(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAdapter &aa)
+{
+    flushMouseEventStack();
+	addMouseEvent( ea );
+	if( selecionado )
+	{
+		osg::ShapeDrawable* shpDrb = dynamic_cast<osg::ShapeDrawable*>(selecionado->getChild(0));
+		if (shpDrb)
+		{
+			shpDrb->setColor( osg::Vec4(1,1,1,1) ); // branco
+			movendoBox = false;
+		}
+	}
+	return false;
+}
+
 bool OVNIController::performMovement()
 {
 	// return if less then two events have been added
-	if( mouseFree || _ga_t0.get() == NULL || _ga_t1.get() == NULL )
+	if( _ga_t0.get() == NULL || _ga_t1.get() == NULL )
+		return false;
+	if( mouseFree )
 	{
 		if( Warping )
 			mouseFree = false;
@@ -479,8 +555,8 @@ bool OVNIController::performMovement()
 	if( dx == 0. && dy == 0. )
 		return false;
 	// call appropriate methods
-	unsigned int buttonMask = _ga_t1->getButtonMask();
 	unsigned int modKeyMask = _ga_t1->getModKeyMask();
+	unsigned int buttonMask = _ga_t1->getButtonMask();
 	if( buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON )
 		return performMovementLeftMouseButton( eventTimeDelta, dx, dy );
 	else if( ( buttonMask == osgGA::GUIEventAdapter::MIDDLE_MOUSE_BUTTON ) ||
@@ -757,7 +833,8 @@ int main( int argc, char** argv )
 	//osg::ref_ptr<OVNIController> controller = new OVNIController(&viewer);
 	controller = new OVNIController(&viewer);
 	viewer.setCameraManipulator(controller);
-	//viewer.setUpViewInWindow(0, 0, 800, 600); // deprecated? osgViewer::View::apply( ViewConfig* config )
+	if( argc > 1 && strcmp( argv[1], "j" ) == 0 )
+		viewer.setUpViewInWindow(0, 0, 800, 600); // deprecated? osgViewer::View::apply( ViewConfig* config )
 	viewer.realize();
 	// Posição inicial da câmera
 	osg::Quat quad0;
@@ -789,7 +866,8 @@ int main( int argc, char** argv )
 	crossGeode->addDrawable(linesGeom);
 	crossGeode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED); // With lighting off, geometry color ignores the viewing angle
 	// Texto do HUD
-	text = createText(osg::Vec3(10, windowH-30, 0), "", 25);
+	//text = createText(osg::Vec3(10, windowH-30, 0), "", 25);
+	text = createText(osg::Vec3(10, windowH-30, 0), "", windowW/64);
 	osg::ref_ptr<osg::Geode> textGeode = new osg::Geode;
 	textGeode->addDrawable( text );
 	osg::ref_ptr<osg::Camera> hudCamera = createHUDCamera(0, windowW, 0, windowH); // cria um HUD do tamanho da janela, não mais 800x600 (piorou o desempenho?)
@@ -813,6 +891,6 @@ int main( int argc, char** argv )
 	return 0;
 }
 
-// g++ terreno1.cpp -losg -losgDB -losgFX -losgGA -losgSim -losgText -losgUtil -losgViewer -o terreno1
+// g++ terreno1.cpp -losg -losgDB -losgFX -losgGA -losgText -losgUtil -losgViewer -o terreno1
 
-// g++ terreno1.cpp -Wl,-Bstatic -losg -losgDB -losgGA -losgSim -losgText -losgUtil -losgViewer -o terreno1
+// g++ terreno1.cpp -Wl,-Bstatic -losg -losgDB -losgGA -losgText -losgUtil -losgViewer -o terreno1 (ainda não funciona)
