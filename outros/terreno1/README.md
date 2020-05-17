@@ -109,13 +109,13 @@ Um dos cubos sendo identificado com o mouse, destacado em branco. Seu nome apare
 
 ![](terr1i2.jpg)
 
-A ideia é dominar essas técnicas para acrescentar e manipular tipos variados de objetos sobre o terreno. Os próximos passos são:
+Para mover um cubo, mude para o modo de mouse livre (Tab), clique nele com o botão esquerdo do mouse e arraste. O cubo ficará amarelo enquanto estiver sendo arrastado.
 
-- Arrastar os cubos com o mouse
-- Dar nome a cada cubo
+A ideia é dominar essas técnicas para acrescentar e manipular tipos variados de objetos sobre o terreno. O próximo passo é dar nome a cada cubo usando algum Widget.
 
 ## Prioridade 1
 
+- Identificar elementos da geografia, com nomes no HUD
 - Compilar estaticamente para testar em outras máquinas, onde o OSG não esteja instalado.
 - Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
 - Modificar a textura do mapa dinamicamente
@@ -126,6 +126,5 @@ A ideia é dominar essas técnicas para acrescentar e manipular tipos variados d
 - Usar teclas PageUp para ganhar altitude, e PageDown para perder altitude
 - Usar teclas Shift para acelerar
 - Usar botão direito do mouse (?) para navegar na mesma altitude
-- MODO B: identificar elementos da geografia, com nomes no HUD
 - Usar teclas QE para girar ao redor do eixo vertical (do mundo, não da câmera -- pois não há roll). Embora os movimentos horizontais do mouse já façam isso, pode fazer mais rápido, e também pode ser útil no MODO B
 - Usar outras fontes no HUD
