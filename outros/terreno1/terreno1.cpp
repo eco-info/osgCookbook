@@ -1,6 +1,7 @@
 // Primeiro terreno controlado por mouse e teclado
 // derivado de https://github.com/SunilRao01/OSGFirstPersonController
 // vpbmaster -v 0.005 -l 6 -d BRalt.tif -t br.png -o terreno1/BR.osgb
+// Lista de classes: https://codedocs.xyz/openscenegraph/OpenSceneGraph/annotated.html
 
 /* To-do:
  * 
@@ -11,22 +12,28 @@
  . Impedir câmera de passar do chão
  . Desenhar bússola (Heading) (removível)
  . Desenhar retângulos translúcidos no HUD
- * Barra de espaço jogando pra posição inicial anterior
+ . Barra de espaço jogando pra posição inicial anterior
+ - Trocar espaços no início das linhas por tabs (procurar "  " | Geany menu Edit|Preferences|Editor|Display|Show white space)
+ - acrescentar luzes (luz não ficou direcional...)
+ - Inserir objetos 3d (podem representar grandes obras, problemas a resolver, etc) (definir a escala)
+ - desenhar shapefiles (ok, mas não serve pra UFs)
+ . Identificar os objetos 3d com o mouse
+ * Dar nome aos objetos 3d dentro do jogo (osgWidget::Input?)
+ * UFs com decalque, overlay, shaders, mudança da textura... ?
+ * Mudar o tamanho da janela dentro do jogo
+ * Estudar animações (para os objetos 3d e para a intro)
+ * Intro: aproximando velozmente do "infinito", desacelerando até a posição inicial sobre o país (osglight.cpp:130)
  * Fazer a velocidade do movimento não depender dos FPS
  * Testar em outro PC, sem OSG instalado
- * Trocar espaços no início das linhas por tabs
  * Criar botões clicáveis no HUD (ligar e desligar bússola, linhas das UFs, etc)
  * Bússola e outros elementos devem escalar com o tamanho da janela? Quanto?
  * Usar mapa com oceano azul
  * Calcular altitude real
  * Botão direito do mouse (?): navegar na mesma altitude
  * Botão direito do mouse travando movimento?
- * acrescentar luzes e objetos
- / desenhar shapefiles
  * mudar cálculos do handle para outro lugar?
  * mudar FirstPersonManipulator para StandardManipulator?
  * criar controlador a pé
- * Intro: aproximando velozmente do "infinito", desacelerando até a posição inicial sobre o país
  * 
  */
 
@@ -34,9 +41,15 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <osg/MatrixTransform>
+#include <osg/PolygonMode>
 #include <osg/PositionAttitudeTransform>
+#include <osg/ShapeDrawable>
+#include <osg/ValueObject>
 #include <osgDB/ReadFile>
+#include <osgFX/Outline>
 #include <osgGA/FirstPersonManipulator>
+#include <osgSim/OverlayNode>
 #include <osgText/Text>
 #include <osgUtil/LineSegmentIntersector>
 #include <osgViewer/Viewer>
@@ -52,10 +65,8 @@ osg::Camera* createHUDCamera( double left, double right, double bottom, double t
 	camera->setClearMask( GL_DEPTH_BUFFER_BIT );
 	camera->setRenderOrder( osg::Camera::POST_RENDER );
 	camera->setAllowEventFocus( false );
-	camera->setProjectionMatrix(
-	osg::Matrix::ortho2D(left, right, bottom, top) );
-	camera->getOrCreateStateSet()->setMode(
-	GL_LIGHTING, osg::StateAttribute::OFF );
+	camera->setProjectionMatrix( osg::Matrix::ortho2D(left, right, bottom, top) );
+	camera->getOrCreateStateSet()->setMode( GL_LIGHTING, osg::StateAttribute::OFF );
 	return camera.release();
 }
 
@@ -93,23 +104,32 @@ protected:
 	osg::Timer mainTimer;
 };
 
+//osg::PI = 3.14159265358979323846;
+const float pi = 3.141592653;
+float lonC = (-74-34.8)/2; // -54.4
+float latC = (5.3333333-33.8666667)/2; // -14.2666667
+float rCeu = (-34.8+74)*2; // 78.4 = "raio do céu" (para calcular a posição inicial da câmera e a posição do "Sol")
+float solLO=pi/4, solNS=pi/8; // ângulo do Sol, leste-oeste e norte-sul
+osg::Vec3d posSol = osg::Vec3d( lonC+rCeu*sin(solLO), latC+rCeu*sin(solNS), rCeu*cos(solLO)*cos(solNS) );
 osg::ref_ptr<OVNIController> controller;
-//osg::ref_ptr<osg::Group> shpUFs;
 const float acc = 0.1;
 const float maxVel = 1;
-osg::Vec3d tempMov;
-float velX = 0, velY = 0, velZ = 0;	// XYZ: velocidades lateral, vertical e frontal
+osg::Vec3d camSpeed;
+float velX=0, velY=0, velZ=0, velSol=0.01;	// XYZ: velocidades lateral, vertical e frontal
 float camAlt = 0, camLat = 0, camLon = 0, ptrAlt = 0, ptrLat = 0, ptrLon = 0;
-bool keyW = false, keyA = false, keyS = false, keyD = false, keyR = false, keyF = false;
+bool keyW=false, keyA=false, keyS=false, keyD=false, keyR=false, keyF=false, keyL=false, keyO=false, keyK=false, keyI=false;
 bool Homing = false, mouseFree = false, Warping = false, mostraBussola = true;
 const float inputTimeInterval = 0.02;
 double maxTick = inputTimeInterval;
 int windowX, windowY, windowW, windowH;
 osgText::Text* text;
 osgViewer::Viewer::Windows::iterator window;
+osg::ref_ptr<osg::Node> Sol;
 osg::ref_ptr<osg::Geode> crossGeode;
 osg::ref_ptr<osg::PositionAttitudeTransform> bussola;
 osg::ref_ptr<osg::PositionAttitudeTransform> menu;
+osg::ref_ptr<osg::Group> blocos;
+osg::ref_ptr<osg::Geometry> escondido = nullptr;
 
 osg::Vec3d fromQuat(const osg::Quat& quat, bool degrees)
 {
@@ -139,15 +159,55 @@ osg::Vec3d fromQuat(const osg::Quat& quat, bool degrees)
 	if (degrees)
 	{
 		heading = osg::RadiansToDegrees(heading);
-		pitch   = osg::RadiansToDegrees(pitch);
-		//roll    = osg::RadiansToDegrees(roll);
+		pitch = osg::RadiansToDegrees(pitch);
+		//roll = osg::RadiansToDegrees(roll);
 	}
 	return osg::Vec3d(heading, pitch, 0); // (não usa roll)
 }
 
+void criaBloco( osg::Quat camRotation )
+{
+	osg::ref_ptr<osg::ShapeDrawable> shape = new osg::ShapeDrawable( new osg::Box );
+	shape->setDataVariance( osg::Object::DYNAMIC );
+	shape->setUseDisplayList( false );
+	shape->setName( "Box " + std::to_string( blocos->getNumChildren() ) );
+
+	osg::ref_ptr<osg::Geode> geode = new osg::Geode;
+	geode->addDrawable( shape.get() );
+	osg::Vec3 hpr = fromQuat(camRotation,false); // ângulos da câmera, em radianos
+	// hpr.x() = heading
+	geode->setUserValue( "speed", osg::Vec3d(-0.1*sin(hpr.x())*sin(hpr.y()),0.1*cos(hpr.x())*sin(hpr.y()),-0.005) ); // velocidade "pra frente" (câmera) e pra baixo (gravidade)
+	geode->setName( "Bloco " + std::to_string( blocos->getNumChildren() ) );
+
+	osg::ref_ptr<osg::Geometry> gaiola = new osg::Geometry;
+	gaiola = dynamic_cast<osg::Geometry*>( shape->clone(osg::CopyOp::DEEP_COPY_SHAPES) ); // gaiola branca que aprece quando o cubo é selecionado
+	gaiola->setName( "Gaiola " + std::to_string( blocos->getNumChildren() ) );
+	osg::Vec3Array *vertices = new osg::Vec3Array;
+	vertices = dynamic_cast<osg::Vec3Array*>(gaiola->getVertexArray());
+	geode->addChild( gaiola );
+
+	osg::Vec4Array* colors = new osg::Vec4Array;
+	colors->push_back(osg::Vec4(1,0,0,0.5)); // 0.5 = translúcido, se usar GL_BLEND abaixo
+	shape->setColorArray(colors, osg::Array::BIND_OVERALL);
+	// shape->getOrCreateStateSet()->setMode( GL_BLEND, osg::StateAttribute::ON ); // deixa translúcido
+
+	osg::ref_ptr<osg::MatrixTransform> trans = new osg::MatrixTransform;
+
+	trans->setMatrix( osg::Matrix::scale( 0.1, 0.1, 0.1 ) *
+						osg::Matrix::translate( osg::Vec3(camLon, camLat, camAlt)+camRotation*osg::Vec3(0,0,-1) ) ); // posição: -1 = distância à frente da câmera
+	trans->getOrCreateStateSet()->setMode( GL_NORMALIZE, osg::StateAttribute::ON );
+	trans->getOrCreateStateSet()->setAttributeAndModes( new osg::PolygonMode(osg::PolygonMode::FRONT_AND_BACK, osg::PolygonMode::LINE) );
+	trans->getOrCreateStateSet()->setMode( GL_LIGHTING, osg::StateAttribute::OFF );
+
+	trans->addChild( geode );
+	blocos->addChild( trans );
+}
+
 bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAdapter &aa)
 {
-	FirstPersonManipulator::handle(ea, aa); // Still use first person manipulator for camera movements (Inherited class function)
+	if( ea.getEventType() == osgGA::GUIEventAdapter::MOVE ||
+		ea.getEventType() == osgGA::GUIEventAdapter::DRAG)
+		return handleMouseMove( ea, aa ); // barra de espaços parou de levar pra coordenada inicial anterior
 	if (!_viewer)
 		return false;
 	// Set the viewer's "eye" position, which is located at the center of the camera.
@@ -161,6 +221,9 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 		//std::cout << ea.getKey() << "\n";
 		switch(ea.getKey())
 		{
+			case ' ': // Barra de espaço
+				criaBloco( camRotation );
+				break;
 			case 65289: // Tab
 				mouseFree = !mouseFree;
 				(*window)->useCursor(mouseFree);
@@ -190,9 +253,6 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 					bussola->setNodeMask(0); // esconde a bússola
 				}
 				break;
-			/*case 'u': // mostra/esconde as UFs
-				shpUFs->setNodeMask(!shpUFs->getNodeMask()); // e se algum outro bit for usado, corremos esse risco (talvez no futuro) ??
-				break;*/
 			case 'w':
 				keyW = true;
 				break;
@@ -210,6 +270,18 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 				break;
 			case 'f':
 				keyF = true;
+				break;
+			case 'l':
+				keyL = true;
+				break;
+			case 'o':
+				keyO = true;
+				break;
+			case 'k':
+				keyK = true;
+				break;
+			case 'i':
+				keyI = true;
 				break;
 		}
 	}
@@ -236,12 +308,22 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 			case 'f':
 				keyF = false;
 				break;
+			case 'l':
+				keyL = false;
+				break;
+			case 'o':
+				keyO = false;
+				break;
+			case 'k':
+				keyK = false;
+				break;
+			case 'i':
+				keyI = false;
+				break;
 		}
 	}
 	osg::Vec3 hpr = fromQuat(camRotation,true); // ângulos da câmera, em graus
-	std::stringstream /*h, p, */eyeX, eyeY, eyeZ;
-	//h << std::fixed << std::setprecision(1) << hpr.x(); // heading
-	//p << std::fixed << std::setprecision(1) << hpr.y(); // pitch
+	std::stringstream eyeX, eyeY, eyeZ;
 
 	camLat = eyePos.y();
 	camLon = eyePos.x();
@@ -270,10 +352,9 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 		}
 	}
 	bussola->setAttitude(osg::Quat(osg::inDegrees(-hpr.x()),osg::Vec3d(0,0,1)));
-	//text->setText( "OVNI lat:lon:alt " + eyeY.str() + ":" + eyeX.str() + ":" + eyeZ.str() + "\nH/P " + h.str() + "/" + p.str() + "\n" + pickStr );
 	text->setText( "OVNI lat:lon:alt " + eyeY.str() + ":" + eyeX.str() + ":" + eyeZ.str() + "\n" + pickStr );
 
-	eyePos += camRotation * tempMov * camAlt/10; // * camAlt/10 faz a velocidade aumentar com a altitude
+	eyePos += camRotation * camSpeed * camAlt/10; // * camAlt/10 faz a velocidade aumentar com a altitude
 	matrix.setTrans(eyePos);
 	// Check [mainTimer.time % (time divisor) == 0]
 	if (mainTimer.time_s() >= maxTick) // ??
@@ -288,9 +369,9 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 // examples/osgpick/osgpick.cpp:102
 std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAdapter& ea)
 {
-    osgUtil::LineSegmentIntersector::Intersections intersections;
-    if (view->computeIntersections(ea,intersections))
-    {
+	osgUtil::LineSegmentIntersector::Intersections intersections;
+	if (view->computeIntersections(ea,intersections))
+	{
 		osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
 		std::stringstream ptrX, ptrY, ptrZ;
 		ptrLat = hitr->getWorldIntersectPoint().y();
@@ -299,15 +380,56 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 		ptrX << std::fixed << std::setprecision(1) << ptrLon;
 		ptrY << std::fixed << std::setprecision(1) << ptrLat;
 		ptrZ << std::fixed << std::setprecision(2) << ptrAlt;
-		return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str();
-    }
+		osg::NodePath path = hitr->nodePath;
+		bool achou = false;
+		std::string nome = "";
+		for( osg::NodePath::const_iterator hitNode = path.begin(); hitNode != path.end(); ++hitNode)
+		{
+			if( strcmp( (*hitNode)->className(),"Geode" ) == 0 || strcmp( (*hitNode)->className(),"Terrain" ) == 0 )
+			{
+				nome = (*hitNode)->getName();
+				achou = true;
+				if ( strcmp( (*hitNode)->className(),"Geode" ) == 0 )
+				{
+					if( escondido == nullptr )
+					{
+						(*hitNode)->asGroup()->getChild(0)->setNodeMask(0); // esconde o objeto
+						escondido = (*hitNode)->asGroup()->getChild(0)->asGeometry();
+					}
+					else
+					{
+						//std::cout << escondido->getName() << "|" << (*hitNode)->asGroup()->getChild(0)->getName() << "\n"; objeto "Box"
+						if( escondido->getName().compare( (*hitNode)->asGroup()->getChild(0)->getName() ) != 0 )
+						{
+							(*hitNode)->asGroup()->getChild(0)->setNodeMask(0); // esconde o objeto
+							escondido->setNodeMask(1); // mostra o anterior
+							escondido = (*hitNode)->asGroup()->getChild(0)->asGeometry();
+						}
+					}
+				}
+				else // Terrain
+				{
+					if( escondido != nullptr)
+					{
+						escondido->setNodeMask(1);
+						escondido = nullptr;
+					}
+				}
+				break;
+			}
+		}
+		if( achou )
+			return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nome;
+		else
+			return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str();
+	}
 	else
 		return "";
 }
 
 // https://groups.google.com/forum/#!searchin/osg-users/LineSegmentIntersector|sort:date/osg-users/f4WZnzr8X5w/37pAZ4QqAwAJ
 // src/osgUtil/LineSegmentIntersector.cpp
-float OVNIController::pickDown( osg::Vec3d pos )
+float OVNIController::pickDown( osg::Vec3d pos ) // retorna altitude do terreno (className() == "Geometry") naquele ponto, ou -1 se estiver fora do terreno
 {
 	osgUtil::LineSegmentIntersector::Intersections intersections;
 	osg::Vec3d pos1( pos.x(), pos.y(), pos.z()+100 );
@@ -317,8 +439,16 @@ float OVNIController::pickDown( osg::Vec3d pos )
 	_viewer->getSceneData()->accept( iv );
 	if( intsec->containsIntersections() )
 	{
-		osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intsec->getIntersections().begin();
-		return hitr->getWorldIntersectPoint().z();
+        for(osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intsec->getIntersections().begin();
+            hitr != intsec->getIntersections().end();
+            ++hitr)
+        {
+			if ( strcmp(hitr->drawable->className(),"Geometry") == 0 )
+			{
+				return hitr->getWorldIntersectPoint().z();
+			}
+		}
+		return -1;
 	}
 	else
 		return -1;
@@ -405,7 +535,7 @@ bool OVNIController::handleMouseMove(const osgGA::GUIEventAdapter &ea, osgGA::GU
 	return true;
 }
 
-void calcAcc() // calcula aceleração do OVNI
+void calcAcc(osgViewer::Viewer* viewer) // calcula aceleração do OVNI
 {
 	// velocidade frontal
 	if (!keyW && !keyS)
@@ -437,320 +567,201 @@ void calcAcc() // calcula aceleração do OVNI
 		if (keyF && velY > -maxVel)
 			velY -= acc;
 	}
-	tempMov.set(velX, velY, velZ);
+	camSpeed.set(velX, velY, velZ);
+
+	// gravidade
+	osg::Vec3d vel, pos;
+	osg::Matrix matrix;
+	osg::Quat rotation;
+	osg::ref_ptr<osg::MatrixTransform> bloco;
+	for (int i=0; i<blocos->getNumChildren(); i++)
+	{
+		bloco = dynamic_cast<osg::MatrixTransform*>( blocos->getChild(i) );
+		bloco->getChild(0)->getUserValue( "speed", vel );
+		if ( vel != osg::Vec3d( 0,0,0 ) )
+		{
+			vel += osg::Vec3d( 0,0,-0.005 ); // acelera
+			matrix = bloco->getMatrix();
+			rotation = matrix.getRotate();
+			pos = matrix.getTrans();
+			pos += rotation*vel;
+			float chao = controller->pickDown( pos ) + 0.05; // 0.5 é relativo ao tamanho do cubo
+			if ( pos.z() <= chao ) // para no chão
+			{
+				vel = osg::Vec3d( 0,0,0 );
+				pos.z() = chao;
+				bloco->setMatrix( osg::Matrix::scale( 0.1, 0.1, 0.1 ) * osg::Matrix::translate( pos ) );
+			}
+			else // continua caindo
+			{
+				bloco->setMatrix( osg::Matrix::scale( 0.1, 0.1, 0.1 ) * osg::Matrix::translate( pos ) );
+			}
+			bloco->getChild(0)->setUserValue( "speed", vel );
+		}
+	}
+	// Sol
+	bool solMudou = false;
+	if (keyL)
+	{
+		solMudou = true;
+		solLO += velSol;
+		if( solLO > pi)
+			solLO -= 2*pi;
+	}
+	else
+	if (keyO)
+	{
+		solMudou = true;
+		solLO -= velSol;
+		if( solLO < pi)
+			solLO += 2*pi;
+	}
+	if (keyI)
+	{
+		solMudou = true;
+		solNS += velSol;
+		if( solNS > pi)
+			solNS -= 2*pi;
+	}
+	else
+	if (keyK)
+	{
+		solMudou = true;
+		solNS -= velSol;
+		if( solNS < pi)
+			solNS += 2*pi;
+	}
+	if (solMudou)
+	{
+		posSol = osg::Vec3d( lonC+rCeu*sin(solLO), latC+rCeu*sin(solNS), rCeu*cos(solLO)*cos(solNS) );
+		osg::MatrixTransform* SolM = dynamic_cast<osg::MatrixTransform*>( Sol.get() );
+		SolM->setMatrix( osg::Matrix::translate( posSol ) );
+	}
 }
 
 void criaMenus() // examples/osggeometry/osggeometry.cpp
 {
-    /*osg::ref_ptr<osg::Image> image = osgDB::readRefImageFile("compass.png");
-    if (!image)
-		return;*/
-    osg::Geometry* polyGeom = new osg::Geometry();
-    int mnuW = windowW;
-    int mnuH = 100;
-    osg::Vec3 myCoords[] =
-    {
-        osg::Vec3(0,0,0),
-        osg::Vec3(0,-mnuH,0),
-        osg::Vec3(mnuW,-mnuH,0),
-        osg::Vec3(mnuW,0,0)
-    };
-    polyGeom->setVertexArray(new osg::Vec3Array(4,myCoords));
-    osg::Vec4Array* colors = new osg::Vec4Array;
-    colors->push_back(osg::Vec4(0,0,0,0.5)); // alpha 0.5 = translúcido
-    polyGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
-    osg::Vec3Array* normals = new osg::Vec3Array;
-    normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
-    polyGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
-    osg::Vec2 myTexCoords[] =
-    {
-        osg::Vec2(0,1),
-        osg::Vec2(0,0),
-        osg::Vec2(1,0),
-        osg::Vec2(1,1)
-    };
-    polyGeom->setTexCoordArray(0,new osg::Vec2Array(4,myTexCoords));
-    unsigned short myIndices[] = { 0, 1, 3, 2 };
-    polyGeom->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLE_STRIP,4,myIndices));
-    osg::StateSet* stateset = new osg::StateSet;
-    /*osg::Texture2D* texture = new osg::Texture2D;
-    texture->setImage(image);
-    stateset->setTextureAttributeAndModes(0, texture,osg::StateAttribute::ON);*/
-    stateset->setMode(GL_BLEND, osg::StateAttribute::ON); // deixa fundo do PNG transparente
-    polyGeom->setStateSet(stateset);
-    osg::Geode* geode = new osg::Geode();
-    geode->addDrawable(polyGeom);
-    geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
-    menu = new osg::PositionAttitudeTransform();
+	osg::Geometry* polyGeom = new osg::Geometry();
+	int mnuW = windowW;
+	int mnuH = 100;
+	osg::Vec3 myCoords[] =
+	{
+		osg::Vec3(0,0,0),
+		osg::Vec3(0,-mnuH,0),
+		osg::Vec3(mnuW,-mnuH,0),
+		osg::Vec3(mnuW,0,0)
+	};
+	polyGeom->setVertexArray(new osg::Vec3Array(4,myCoords));
+	osg::Vec4Array* colors = new osg::Vec4Array;
+	colors->push_back(osg::Vec4(0,0,0,0.5)); // alpha 0.5 = translúcido
+	polyGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
+	osg::Vec3Array* normals = new osg::Vec3Array;
+	normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
+	polyGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
+	osg::Vec2 myTexCoords[] =
+	{
+		osg::Vec2(0,1),
+		osg::Vec2(0,0),
+		osg::Vec2(1,0),
+		osg::Vec2(1,1)
+	};
+	polyGeom->setTexCoordArray(0,new osg::Vec2Array(4,myTexCoords));
+	unsigned short myIndices[] = { 0, 1, 3, 2 };
+	polyGeom->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLE_STRIP,4,myIndices));
+	osg::StateSet* stateset = new osg::StateSet;
+	stateset->setMode(GL_BLEND, osg::StateAttribute::ON); // deixa fundo do PNG transparente
+	polyGeom->setStateSet(stateset);
+	osg::Geode* geode = new osg::Geode();
+	geode->addDrawable(polyGeom);
+	geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
+	menu = new osg::PositionAttitudeTransform();
 	menu->setNodeMask(0); // menu começa oculto
 	menu->setPosition(osg::Vec3d(0,windowH,-1));
-    menu->addChild(geode);
+	menu->addChild(geode);
 }
 
 void criaBussola() // examples/osggeometry/osggeometry.cpp
 {
-    osg::ref_ptr<osg::Image> image = osgDB::readRefImageFile("compass.png");
-    if (!image)
+	osg::ref_ptr<osg::Image> image = osgDB::readRefImageFile("compass.png");
+	if (!image)
 		return;
-    osg::Geometry* polyGeom = new osg::Geometry();
-    int bussP = 64; // porque compass.png é 128x128 pixels
-    osg::Vec3 myCoords[] =
-    {
-        osg::Vec3(-bussP,bussP,0),
-        osg::Vec3(-bussP,-bussP,0),
-        osg::Vec3(bussP,-bussP,0),
-        osg::Vec3(bussP,bussP,0)
-    };
-    polyGeom->setVertexArray(new osg::Vec3Array(4,myCoords));
-    osg::Vec4Array* colors = new osg::Vec4Array;
-    colors->push_back(osg::Vec4(1.0f,1.0f,1.0f,1.0f)); // 0.5 no final deixa translúcido
-    polyGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
-    osg::Vec3Array* normals = new osg::Vec3Array;
-    normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
-    polyGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
-    osg::Vec2 myTexCoords[] =
-    {
-        osg::Vec2(0,1),
-        osg::Vec2(0,0),
-        osg::Vec2(1,0),
-        osg::Vec2(1,1)
-    };
-    polyGeom->setTexCoordArray(0,new osg::Vec2Array(4,myTexCoords));
-    unsigned short myIndices[] = { 0, 1, 3, 2 };
-    polyGeom->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLE_STRIP,4,myIndices));
-    osg::StateSet* stateset = new osg::StateSet;
-    osg::Texture2D* texture = new osg::Texture2D;
-    texture->setImage(image);
-    stateset->setTextureAttributeAndModes(0, texture,osg::StateAttribute::ON);
-    stateset->setMode(GL_BLEND, osg::StateAttribute::ON); // deixa fundo do PNG transparente
-    polyGeom->setStateSet(stateset);
-    osg::Geode* geode = new osg::Geode();
-    geode->addDrawable(polyGeom);
-    geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
-    bussola = new osg::PositionAttitudeTransform();
+	osg::Geometry* polyGeom = new osg::Geometry();
+	int bussP = 64; // porque compass.png é 128x128 pixels
+	osg::Vec3 myCoords[] =
+	{
+		osg::Vec3(-bussP,bussP,0),
+		osg::Vec3(-bussP,-bussP,0),
+		osg::Vec3(bussP,-bussP,0),
+		osg::Vec3(bussP,bussP,0)
+	};
+	polyGeom->setVertexArray(new osg::Vec3Array(4,myCoords));
+	osg::Vec4Array* colors = new osg::Vec4Array;
+	colors->push_back(osg::Vec4(1.0f,1.0f,1.0f,1.0f)); // 0.5 no final deixa translúcido
+	polyGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
+	osg::Vec3Array* normals = new osg::Vec3Array;
+	normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
+	polyGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
+	osg::Vec2 myTexCoords[] =
+	{
+		osg::Vec2(0,1),
+		osg::Vec2(0,0),
+		osg::Vec2(1,0),
+		osg::Vec2(1,1)
+	};
+	polyGeom->setTexCoordArray(0,new osg::Vec2Array(4,myTexCoords));
+	unsigned short myIndices[] = { 0, 1, 3, 2 };
+	polyGeom->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLE_STRIP,4,myIndices));
+	osg::StateSet* stateset = new osg::StateSet;
+	osg::Texture2D* texture = new osg::Texture2D;
+	texture->setImage(image);
+	stateset->setTextureAttributeAndModes(0, texture,osg::StateAttribute::ON);
+	stateset->setMode(GL_BLEND, osg::StateAttribute::ON); // deixa fundo do PNG transparente
+	polyGeom->setStateSet(stateset);
+	osg::Geode* geode = new osg::Geode();
+	geode->addDrawable(polyGeom);
+	geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
+	bussola = new osg::PositionAttitudeTransform();
 	bussola->setPosition(osg::Vec3d(windowW-bussP,bussP,0));
-    bussola->addChild(geode);
+	bussola->addChild(geode);
 }
-/*
-uint32_t leBig(std::ifstream& f)
+
+osg::Node* createLightSource( unsigned int num, const osg::Vec3& trans, const osg::Vec4& color )
 {
-    char *buf;
-    uint32_t num;
-    uint8_t num1, num2, num3, num4;
-    buf = new char[4];
-    f.read(buf,4);
-    num1 = buf[0];
-    num2 = buf[1];
-    num3 = buf[2];
-    num4 = buf[3];
-    num = num1*0x1000000 +
-          num2*0x10000   +
-          num3*0x100     +
-          num4;
-    delete[] buf;
-    return num;
+	osg::ref_ptr<osg::Light> light = new osg::Light;
+	light->setLightNum( num );
+	light->setDiffuse( color );
+	light->setPosition( osg::Vec4(0.0f, 0.0f, 0.0f, 1.0f) );
+	osg::ref_ptr<osg::LightSource> lightSource = new osg::LightSource;
+	lightSource->setLight( light );
+	osg::ref_ptr<osg::MatrixTransform> sourceTrans = new osg::MatrixTransform;
+	sourceTrans->setMatrix( osg::Matrix::translate(trans) );
+	sourceTrans->addChild( lightSource.get() );
+	return sourceTrans.release();
 }
-
-uint32_t leLittle(std::ifstream& f)
-{
-    char *buf;
-    uint32_t num;
-    uint8_t num1, num2, num3, num4;
-    buf = new char[4];
-    f.read(buf,4);
-    num1 = buf[0];
-    num2 = buf[1];
-    num3 = buf[2];
-    num4 = buf[3];
-    num = num4*0x1000000 +
-          num3*0x10000   +
-          num2*0x100     +
-          num1;
-    delete[] buf;
-    return num;
-}
-
-double readDouble(std::ifstream& f)
-{
-    double X;
-    f.read(reinterpret_cast<char*>(&X),8);
-    return X;
-}
-
-//void linhaTerreno(Ogre::ManualObject* linha1,Ogre::Real x,Ogre::Real z)
-//{
-//    linha1->position(x,mTerrainGroup->getHeightAtWorldPosition(x,0,z),z);
-//}
-
-bool FileExists(std::string strFilename)
-{
-	struct stat stFileInfo;
-	return (stat(strFilename.c_str(),&stFileInfo) == 0);
-}
-
-float recSizeT = 0;
-
-//void readLevel4Rec(std::ifstream& f,Ogre::ManualObject* linha)
-void readLevel4Rec(std::ifstream& f)
-{
-    char *buf;
-    uint32_t recNo, recLen, tipo,
-        nParts, nPoints, i, part;
-    double X, Y;
-    size_t j;
-    std::vector<ulong> parts;
-    recNo = leBig(f);
-    recLen = leBig(f);
-    tipo = leLittle(f);
-    int recSize = 0;
-    float altXY;
-    // File format explained in "ESRI Shapefile Technical Description" (shapefile.pdf) - www.esri.com
-    if (tipo == 3 || tipo == 5) // PolyLine or Polygon
-    {
-        buf = new char[32];
-        f.read(buf,32); // reads the bounding box for that record (I won't use it)
-        delete[] buf;         // (so I delete it)
-        // reads number of parts and points of this record/polygon
-        nParts = leLittle(f);
-        nPoints = leLittle(f);
-        // read all the parts at once and put their positions (relative to this record) in parts' vector
-        // first part always begins at 0
-        for ( i=0 ; i<nParts ; i++ )
-        {
-            part = leLittle(f);
-            parts.push_back(part);
-        }
-        if (nParts > 1)
-            part = parts[1]; // where the first part will end (the beginning of the 2nd part [1])
-        else
-            part = 0;
-		// Linhas das UFs sobre o mapa
-		osg::ref_ptr<osg::Geode> shpGeode = new osg::Geode();
-		osg::Geometry* linesGeom = new osg::Geometry();
-		osg::Vec3Array* vertices = new osg::Vec3Array;
-        j = 1; // reading first part
-        for ( i=0 ; i<nPoints ; i++ )
-        {
-            X = readDouble(f); // longitude
-            Y = readDouble(f); // latitude
-			//std::cout << "	X|Y = " << X << "|" << Y << "\n";
-            //X = newSide*pixelSize*(X-LONGMIN)/(LONGMAX-LONGMIN) - newSide*pixelSize/2; // map X
-            //Y = newSide*pixelSize*(LATMAX-Y)/(LATMAX-LATMIN) - newSide*pixelSize/2;    // map Y
-            if (i == part) // end of the current part (j) or first time of 1 part's record
-            {
-                if (i > 0) // won't do if record has only 1 part (and i=part=0)
-                {
-                    //linha->end(); // jump to another polygon
-					linesGeom->setVertexArray(vertices);
-					osg::Vec4Array* colors = new osg::Vec4Array;
-					colors->push_back(osg::Vec4(0,0,0,1));
-					linesGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
-					osg::Vec3Array* normals = new osg::Vec3Array;
-					normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
-					linesGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
-					linesGeom->addPrimitiveSet(new osg::DrawArrays(osg::PrimitiveSet::LINE_STRIP,0,recSize));
-					shpGeode->addDrawable(linesGeom);
-					shpGeode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED); // With lighting off, geometry color ignores the viewing angle
-					shpUFs->addChild( shpGeode.get() );
-					recSize = 0;
-                    //linha->begin();
-					shpGeode = new osg::Geode();
-					linesGeom = new osg::Geometry();
-					vertices = new osg::Vec3Array;
-                }
-                //altXY = controller->pickDown( osg::Vec3d(X,Y,1) );
-				//vertices->push_back(osg::Vec3d(X,Y,altXY));
-				vertices->push_back(osg::Vec3d(X,Y,1));
-				recSize++;
-				recSizeT++;
-                //linhaTerreno(linha,X,Y); // add point to current polygon
-                if (j < parts.size()) // adjust limit (end point) of next part
-                {
-                    j++;
-                    if (j < parts.size())
-                        part = parts[j];
-                    else
-                        part = -1; // will end the loop by i=nPoints (since its the last part)
-                }
-            }
-            else // i != part, all points inside any part
-            {
-                //altXY = controller->pickDown( osg::Vec3d(X,Y,1) );
-				//vertices->push_back(osg::Vec3d(X,Y,altXY));
-				vertices->push_back(osg::Vec3d(X,Y,1));
-				recSize++;
-				recSizeT++;
-                //linhaTerreno(linha,X,Y);
-            }
-        } // for i
-        // draw remaining points
-        //linha->end();
-		//int numCoords = sizeof(vertices)/sizeof(osg::Vec3);
-		linesGeom->setVertexArray(vertices);
-		osg::Vec4Array* colors = new osg::Vec4Array;
-		colors->push_back(osg::Vec4(0,0,0,1));
-		linesGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
-		osg::Vec3Array* normals = new osg::Vec3Array;
-		normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
-		linesGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
-		linesGeom->addPrimitiveSet(new osg::DrawArrays(osg::PrimitiveSet::LINE_STRIP,0,recSize));
-		shpGeode->addDrawable(linesGeom);
-		shpGeode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED); // With lighting off, geometry color ignores the viewing angle
-		shpUFs->addChild( shpGeode.get() );
-    } // if (tipo==3 || tipo==5)
-}
-
-//void drawLevel4(Ogre::ManualObject* linha)
-bool drawLevel4()
-{
-	bool funcionou = false;
-    char *offsetHeader;
-    ulong fsize;
-    std::string fname = "shp/br.shp";
-    if (FileExists(fname))
-    {
-        std::ifstream fLevel4;
-        fLevel4.open(fname.c_str(),std::ios::binary);
-        if (fLevel4.is_open())
-        {
-			shpUFs = new osg::Group;
-            offsetHeader = new char[72];
-            fLevel4.read(offsetHeader,24); // reads the begin of the file's header
-            fsize = leBig(fLevel4)*2;
-            fLevel4.read(offsetHeader,72); // reads the remaining of the file's header
-            delete[] offsetHeader;
-            while (fLevel4.tellg() < fsize)
-            {
-				//std::cout << "fLevel4.tellg = " << fLevel4.tellg() << "\n";
-                //linha->begin("matLinha",Ogre::RenderOperation::OT_LINE_STRIP);
-                //readLevel4Rec(fLevel4,linha); // read and draw the roads
-                readLevel4Rec(fLevel4); // read and draw the roads
-            }
-            funcionou = true;
-            fLevel4.close();
-            std::cout << "Total de pontos lidos (UFs) = " << recSizeT << "\n"; // 19481, leva mais ou menos 2 segundos pra calcular altitude de todos
-        }
-        else std::cout << "Problema ao abrir arquivo " << fname << '\n';
-    }
-    return funcionou;
-}
-*/
 
 int main( int argc, char** argv )
 {
+	blocos = new osg::Group;
 	osg::ref_ptr<osg::Group> root = new osg::Group;
-	root->addChild( osgDB::readNodeFile("BR.osgb") );
-
+	osg::ref_ptr<osg::Node> BRnode = osgDB::readNodeFile("BR.osgb");
+	BRnode->setName("Terreno");
+	root->addChild( BRnode );
+	root->addChild( blocos );
+	// Luz
+	Sol = createLightSource( 0, posSol, osg::Vec4(0.8f,0.8f,0.8f,1.0f) );
+	root->getOrCreateStateSet()->setMode( GL_LIGHT0, osg::StateAttribute::ON );
+	root->addChild( Sol );
+	// Viewer
 	osgViewer::Viewer viewer;
 	viewer.setSceneData( root.get() );
 	//osg::ref_ptr<OVNIController> controller = new OVNIController(&viewer);
 	controller = new OVNIController(&viewer);
 	viewer.setCameraManipulator(controller);
-	//viewer.setUpViewInWindow(0, 0, 800, 600);
+	//viewer.setUpViewInWindow(0, 0, 800, 600); // deprecated? osgViewer::View::apply( ViewConfig* config )
 	viewer.realize();
 	// Posição inicial da câmera
 	osg::Quat quad0;
-	controller->setTransformation(osg::Vec3(-54.4f,-14.2666667f,80.0f), quad0 ); // camLon (-74-34.8)/2 = -54.4, camLat (5.3333333-33.8666667)/2 = -14.2666667, camAlt = 80
+	controller->setTransformation(osg::Vec3(lonC,latC,rCeu), quad0 ); // camLon (-74-34.8)/2 = -54.4, camLat (5.3333333-33.8666667)/2 = -14.2666667, camAlt = 80
 	// Detecta coordenadas da janela
 	osgViewer::Viewer::Windows windows;
 	viewer.getWindows(windows);
@@ -758,13 +769,8 @@ int main( int argc, char** argv )
 	(*window)->useCursor(false);
 	(*window)->getWindowRectangle(windowX, windowY, windowW, windowH);
 	std::cout << "Tamanho da janela: " << windowW << "x" << windowH << "\n";
-
-	// Linhas 3D
-	/*if ( drawLevel4() )
-		root->addChild( shpUFs.get() );*/
-
 	// Linhas do HUD (examples/osggeometry/osggeometry.cpp)
-    crossGeode = new osg::Geode();
+	crossGeode = new osg::Geode();
 	osg::Geometry* linesGeom = new osg::Geometry();
 	osg::Vec3Array* vertices = new osg::Vec3Array(4);
 	int crossP = 20;
@@ -788,18 +794,18 @@ int main( int argc, char** argv )
 	textGeode->addDrawable( text );
 	osg::ref_ptr<osg::Camera> hudCamera = createHUDCamera(0, windowW, 0, windowH); // cria um HUD do tamanho da janela, não mais 800x600 (piorou o desempenho?)
 	hudCamera->addChild( crossGeode.get() );
-    criaBussola();
-    criaMenus();
-    hudCamera->addChild( bussola );
-    hudCamera->addChild( menu );
+	criaBussola();
+	criaMenus();
+	hudCamera->addChild( bussola );
+	hudCamera->addChild( menu );
 	hudCamera->addChild( textGeode.get() );
 	root->addChild( hudCamera.get() );
 	while ( !viewer.done() )
 	{
-		calcAcc();
+		calcAcc( &viewer );
 		if (Homing) // volta a câmera à posição inicial ao apertar Home
 		{
-			controller->setTransformation(osg::Vec3(-54.4f,-14.2666667f,80.0f), quad0 );
+			controller->setTransformation(osg::Vec3(lonC,latC,rCeu), quad0 );
 			Homing = false;
 		}
 		viewer.frame();
@@ -807,4 +813,6 @@ int main( int argc, char** argv )
 	return 0;
 }
 
-// g++ terreno1.cpp -losg -losgDB -losgGA -losgText -losgUtil -losgViewer -o terreno1
+// g++ terreno1.cpp -losg -losgDB -losgFX -losgGA -losgSim -losgText -losgUtil -losgViewer -o terreno1
+
+// g++ terreno1.cpp -Wl,-Bstatic -losg -losgDB -losgGA -losgSim -losgText -losgUtil -losgViewer -o terreno1
