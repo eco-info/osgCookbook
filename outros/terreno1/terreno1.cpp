@@ -19,7 +19,11 @@
  - desenhar shapefiles (ok, mas não serve pra UFs)
  . Identificar os objetos 3d com o mouse
  . Mover os objetos 3d
- * Mostrar nomes das localidades
+ . Mostrar nomes das localidades (procurar também nas células vizinhas !!)
+ . Mover com Caps Lock ligado
+ . Mostrar nomes das cidades (Voronoi)
+ * Nomes das cidades sumindo atrás do terreno montanhoso (mostrar no HUD com coordenadas globais?)
+ * Nomes das cidades atrapalham ao apanhar objetos
  * Dar nome aos objetos 3d dentro do jogo (osgWidget::Input?)
  * UFs com decalque, overlay, shaders, mudança da textura... ?
  * Mudar o tamanho da janela dentro do jogo
@@ -39,10 +43,14 @@
  * 
  */
 
+#include <unicode/utypes.h>
+#include <unicode/unistr.h>
+#include <unicode/translit.h>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <osg/AutoTransform>
 #include <osg/MatrixTransform>
 #include <osg/PolygonMode>
 #include <osg/PositionAttitudeTransform>
@@ -57,6 +65,10 @@
 //#include <osgUtil/PrintVisitor>
 #include <osgViewer/Viewer>
 #include <sys/stat.h>
+
+// https://github.com/pvigier/FortuneAlgorithm - Diagrama de Voronoi
+// https://pvigier.github.io/2018/11/18/fortune-algorithm-details.html
+#include "pvigier.h"
 
 /* create an ordinary camera node which will be rendered on the top after
 the main scene is drawn. It can be used to display some heads-up display (HUD) texts
@@ -109,11 +121,30 @@ protected:
 	osg::Timer mainTimer;
 };
 
+struct tipop
+{
+    float lat, lon;
+    std::string nome;
+};
+typedef std::vector<tipop> tipoP;
+typedef std::map<int,tipoP> tipoLons;
+typedef std::map<int,tipoLons> tipoLats;
+tipoLats Locais;	// nomes das localidades
+struct tCidade
+{
+	std::string nome, UF;
+	float lat, lon, X;
+	uint32_t pop;
+};
+typedef std::vector<tCidade> tCidades;
+tCidades Cidades;
+
 //osg::PI = 3.14159265358979323846;
 const float pi = 3.141592653;
-float lonC = (-74-34.8)/2; // -54.4
-float latC = (5.3333333-33.8666667)/2; // -14.2666667
-float rCeu = (-34.8+74)*2; // 78.4 = "raio do céu" (para calcular a posição inicial da câmera e a posição do "Sol")
+float lonMin=-74, lonMax=-34.8, latMin=-33.8666667, latMax=5.3333333;
+float lonC = (lonMin+lonMax)/2; // -54.4
+float latC = (latMin+latMax)/2; // -14.2666667
+float rCeu = (lonMax-lonMin)*2; // 78.4 = "raio do céu" (para calcular a posição inicial da câmera e a posição do "Sol")
 float solLO=pi/4, solNS=pi/8; // ângulo do Sol, leste-oeste e norte-sul
 osg::Vec3d posSol = osg::Vec3d( lonC+rCeu*sin(solLO), latC+rCeu*sin(solNS), rCeu*cos(solLO)*cos(solNS) );
 osg::ref_ptr<OVNIController> controller;
@@ -134,8 +165,170 @@ osg::ref_ptr<osg::Geode> crossGeode;
 osg::ref_ptr<osg::PositionAttitudeTransform> bussola;
 osg::ref_ptr<osg::PositionAttitudeTransform> menu;
 osg::ref_ptr<osg::Group> blocos;
+osg::ref_ptr<osg::Group> grpVoronoi;
+osg::ref_ptr<osg::Group> grpCidades;
 osg::Geode* selecionado = nullptr;
 //osgUtil::PrintVisitor pv( std::cout );
+
+bool FileExists(std::string strFilename)
+{
+	struct stat stFileInfo;
+	return (stat(strFilename.c_str(),&stFileInfo) == 0);
+}
+
+void getLocais(void)
+{
+    // Limpa locais existentes (para quando mudar de país)
+    if (Locais.begin() != Locais.end())
+    {
+        tipoLats::iterator iC;
+        for (iC=Locais.begin();iC!=Locais.end();iC++)
+        {
+            tipoLons Lons = iC->second;
+            if (Lons.begin() != Lons.end())
+            {
+                tipoLons::iterator iL;
+                for (iL=Lons.begin();iL!=Lons.end();iL++)
+                {
+                    tipoP P = iL->second;
+                    if (P.begin() != P.end())
+                        P.clear();
+                }
+                Lons.clear();
+            }
+        }
+        Locais.clear();
+    }
+    if (FileExists("data/locais_br.txt"))
+    {
+        std::ifstream flocais(std::string("data/locais_br.txt").c_str());
+        if (flocais.is_open())
+        {
+            std::string linha, nome;
+            size_t pos;
+            float lat, lon;
+            int intlat, intlon, numLocais=0;
+            tipop p;
+            tipoP* P;
+            tipoP::iterator iP;
+            tipoLons* pLons;
+            tipoLons::iterator iLons;
+            tipoLats::iterator iLats;
+            while (!flocais.eof())
+            {
+                std::getline(flocais,linha);
+
+                pos = linha.find(',');
+                nome = linha.substr(0,pos);
+                linha = linha.substr(pos+1); // only lat,lon
+                
+                pos = linha.find(',');
+                lat = atof(linha.substr(0,pos).c_str());
+                lon = atof(linha.substr(pos+1).c_str());
+                
+                intlat = floor(lat);
+                intlon = floor(lon);
+                // search Latitude
+                iLats = Locais.find(intlat);
+                if (iLats != Locais.end())
+                {
+                    // found Latitude, search Longitutde
+                    pLons = &iLats->second; // all longitudes inside latitude (intlat)
+                    iLons = pLons->find(intlon);
+                    if (iLons != pLons->end())
+                    {
+                        // found Longitude, insert point
+                        P = &iLons->second; // longitude (intlon) with latitude (intlat)
+                        p.lat = lat;
+                        p.lon = lon;
+                        p.nome = nome;
+                        P->push_back(p);
+                        numLocais++;
+                    }
+                    else
+                    { // iLons == pLons->end()
+                        // insert point
+                        p.lat = lat;
+                        p.lon = lon;
+                        p.nome = nome;
+                        P = new tipoP;
+                        P->push_back(p);
+                        // add Longitude
+                        pLons->insert(std::pair<int,tipoP>(intlon,*P)); // insere nova longitude
+                        numLocais++;
+                    }
+                }
+                else
+                { // iLats == Locais.end()
+                    // insert point
+                    p.lat = lat;
+                    p.lon = lon;
+                    p.nome = nome;
+                    P = new tipoP;
+                    P->push_back(p);
+                    // add Longitude
+                    pLons = new tipoLons;
+                    pLons->insert(std::pair<int,tipoP>(intlon,*P));
+                    // add Latitude
+                    Locais.insert(std::pair<int,tipoLons>(intlat,*pLons)); // insere nova latitude
+                    numLocais++;
+                }
+            }
+        }
+    }
+}
+
+void getCidades(void)
+{
+    // Limpa cidades existentes (para quando mudar de país)
+    if (Cidades.begin() != Cidades.end())
+    {
+        Cidades.clear();
+    }
+    if (FileExists("data/cidades_br.csv"))
+    {
+        std::ifstream fcidades(std::string("data/cidades_br.csv").c_str());
+        if (fcidades.is_open())
+        {
+            std::string linha, nome;
+            size_t pos;
+            tCidade cidade;
+            float lat, lon;
+            int intlat, intlon, numCidades=0;
+            tipop p;
+            tipoP* P;
+            tipoP::iterator iP;
+            tipoLons* pLons;
+            tipoLons::iterator iLons;
+            tipoLats::iterator iLats;
+            while (!fcidades.eof())
+            {
+                std::getline(fcidades,linha);
+                
+                pos = linha.find("\t");
+                cidade.nome = linha.substr(0,pos);
+                linha = linha.substr(pos+1);
+                
+                pos = linha.find("\t");
+                cidade.lat = atof(linha.substr(0,pos).c_str());
+                linha = linha.substr(pos+1);
+                
+                pos = linha.find("\t");
+                cidade.lon = atof(linha.substr(0,pos).c_str());
+                linha = linha.substr(pos+1);
+                
+                pos = linha.find("\t");
+                cidade.pop = atoi(linha.substr(0,pos).c_str());
+                linha = linha.substr(pos+1);
+                
+                pos = linha.find("\t");
+                cidade.X = atof(linha.substr(0,pos).c_str());
+                cidade.UF = linha.substr(pos+1);
+                Cidades.push_back(cidade);
+            }
+        }
+    }
+}
 
 osg::Vec3d fromQuat(const osg::Quat& quat, bool degrees)
 {
@@ -246,6 +439,7 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 				Homing = true;
 				break;
 			case 'b': // Bússola
+			case 'B':
 				mostraBussola = !mostraBussola;
 				if (mostraBussola)
 				{
@@ -257,33 +451,43 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 				}
 				break;
 			case 'w':
+			case 'W':
 				keyW = true;
 				break;
 			case 'a':
+			case 'A':
 				keyA = true;
 				break;
 			case 's':
+			case 'S':
 				keyS = true;
 				break;
 			case 'd':
+			case 'D':
 				keyD = true;
 				break;
 			case 'r':
+			case 'R':
 				keyR = true;
 				break;
 			case 'f':
+			case 'F':
 				keyF = true;
 				break;
 			case 'l':
+			case 'L':
 				keyL = true;
 				break;
 			case 'o':
+			case 'O':
 				keyO = true;
 				break;
 			case 'k':
+			case 'K':
 				keyK = true;
 				break;
 			case 'i':
+			case 'I':
 				keyI = true;
 				break;
 		}
@@ -294,33 +498,43 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 		switch(ea.getKey())
 		{
 			case 'w':
+			case 'W':
 				keyW = false;
 				break;
 			case 'a':
+			case 'A':
 				keyA = false;
 				break;
 			case 's':
+			case 'S':
 				keyS = false;
 				break;
 			case 'd':
+			case 'D':
 				keyD = false;
 				break;
 			case 'r':
+			case 'R':
 				keyR = false;
 				break;
 			case 'f':
+			case 'F':
 				keyF = false;
 				break;
 			case 'l':
+			case 'L':
 				keyL = false;
 				break;
 			case 'o':
+			case 'O':
 				keyO = false;
 				break;
 			case 'k':
+			case 'K':
 				keyK = false;
 				break;
 			case 'i':
+			case 'I':
 				keyI = false;
 				break;
 		}
@@ -453,10 +667,52 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 					break;
 				}
 			}
-			if( achou )
-				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nome;
+
+			// local mais próximo
+			float dist, menordist;
+			int intlon, intlat;
+			tipop p;
+			tipoP P;
+			tipoP::iterator iP, menorP;
+			tipoLons pLons;
+			tipoLons::iterator iLons;
+			tipoLats pLats;
+			tipoLats::iterator iLats;
+			std::string nomeLoc;
+			intlon = floor(ptrLon);
+			intlat = floor(ptrLat);
+			iLats = Locais.find(intlat);
+			if (iLats != Locais.end()) // deve olhar em mais de uma quadrícula ao mesmo tempo, quando o mouse estiver na beira de uma !!
+			{
+				pLons = iLats->second;
+				iLons = pLons.find(intlon);
+				if (iLons != pLons.end())
+				{
+					P = iLons->second;
+					menordist = -1;
+					for (iP=P.begin(); iP<P.end(); iP++)
+					{
+						p = *iP;
+						dist = sqrt(pow(ptrLon-p.lon,2)+pow(ptrLat-p.lat,2));
+						if ((menordist < 0) || (dist < menordist))
+						{
+							menordist = dist;
+							menorP = iP;
+						}
+					}
+					p = *menorP;
+					nomeLoc = "Local: " + p.nome;
+				}
+				else
+					nomeLoc = "Local: Indefinido";
+			}
 			else
-				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str();
+				nomeLoc = "Local: Indefinido";
+
+			if( achou )
+				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nomeLoc + "\n" + nome;
+			else
+				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nomeLoc;
 		}
 	}
 	else
@@ -719,7 +975,7 @@ void criaMenus() // examples/osggeometry/osggeometry.cpp
 {
 	osg::Geometry* polyGeom = new osg::Geometry();
 	int mnuW = windowW;
-	int mnuH = 100;
+	int mnuH = 120;
 	osg::Vec3 myCoords[] =
 	{
 		osg::Vec3(0,0,0),
@@ -815,8 +1071,185 @@ osg::Node* createLightSource( unsigned int num, const osg::Vec3& trans, const os
 	return sourceTrans.release();
 }
 
+// https://stackoverflow.com/a/13071166/1086511
+std::string desaxUTF8(const std::string& str) {
+	// UTF-8 std::string -> UTF-16 UnicodeString
+	icu_63::UnicodeString source = icu_63::UnicodeString::fromUTF8(icu_63::StringPiece(str));
+	// Transliterate UTF-16 UnicodeString
+	UErrorCode status = U_ZERO_ERROR;
+	icu_63::Transliterator *accentsConverter = icu_63::Transliterator::createInstance( "NFD; [:M:] Remove; NFC", UTRANS_FORWARD, status );
+	accentsConverter->transliterate(source);
+	// TODO: handle errors with status
+	// UTF-16 UnicodeString -> UTF-8 std::string
+	std::string result;
+	source.toUTF8String(result);
+	return result;
+}
+
+osg::Node* createLabel(const osg::Vec3& pos, float size, const std::string& label, osgText::Text::AxisAlignment axisAlignment)
+{
+    osg::Geode* geode = new osg::Geode();
+    {
+        osgText::Text* text = new  osgText::Text;
+        geode->addDrawable( text );
+        text->setPosition(pos);
+        text->setCharacterSize(size);
+        text->setAxisAlignment(axisAlignment);
+        text->setAlignment(osgText::Text::CENTER_CENTER);
+        std::string dest = desaxUTF8( label );
+        text->setText( dest );
+    }
+    return geode;
+}
+
+void criaVoronoi(int n)
+{
+	std::vector<Vector2> points;
+	// Generate points
+	for( int i=0; i<n; i++ )
+	{
+		points.push_back( Vector2{ lonMin + (lonMax-lonMin)*(double)rand()/(double)RAND_MAX ,
+									latMin + (latMax-latMin)*(double)rand()/(double)RAND_MAX } );
+	}
+
+	// Construct diagram
+	FortuneAlgorithm algorithm(points);
+	algorithm.construct();
+	// Bound the diagram
+	algorithm.bound(Box{lonMin-1, latMin-1, lonMax+1, latMax+1}); // Take the bounding box slightly bigger than the intersection box
+	VoronoiDiagram diagram = algorithm.getDiagram();
+	// Intersect the diagram with a box
+	bool valid = diagram.intersect(Box{lonMin, latMin, lonMax, latMax});
+	if (!valid)
+		throw std::runtime_error("An error occured in the box intersection algorithm");
+	// mostra o resultado
+	osg::ref_ptr<osg::Geode> shpGeode;
+	osg::Geometry* linesGeom;
+	osg::Vec3Array* vertices;
+	grpVoronoi = new osg::Group;
+	grpCidades = new osg::Group;
+    for (std::size_t i = 0; i < diagram.getNbSites(); ++i)
+    {
+        const VoronoiDiagram::Site* site = diagram.getSite(i);
+        Vector2 center = site->point;
+        VoronoiDiagram::Face* face = site->face;
+        VoronoiDiagram::HalfEdge* halfEdge = face->outerComponent;
+        if (halfEdge == nullptr)
+            continue;
+        /*while (halfEdge->prev != nullptr) // estava no código original, não parece servir pra nada
+        {
+            halfEdge = halfEdge->prev;
+            if (halfEdge == face->outerComponent)
+                break;
+        }*/
+		VoronoiDiagram::HalfEdge* start = halfEdge;
+		int lados = 0;
+		float minX=lonMax, maxX=lonMin, minY=latMax, maxY=latMin; // Bounding Box deste site
+		while (halfEdge != nullptr)
+		{
+			lados++;
+			if (halfEdge->origin != nullptr && halfEdge->destination != nullptr)
+			{
+				Vector2 origin = halfEdge->origin->point;
+				if( origin.x < minX )
+					minX = origin.x;
+				if( origin.x > maxX )
+					maxX = origin.x;
+				if( origin.y < minY )
+					minY = origin.y;
+				if( origin.y > maxY )
+					maxY = origin.y;
+			}
+			halfEdge = halfEdge->next;
+			if (halfEdge == start)
+				break;
+		}
+		tCidades::iterator iCidade;
+		int maiorPop = 0;
+		std::string maiorNome;
+		float maiorLon, maiorLat;
+		for( iCidade=Cidades.begin(); iCidade!=Cidades.end(); ++iCidade )
+		{
+			if( iCidade->lon>=minX && iCidade->lon<=maxX && iCidade->lat>=minY && iCidade->lat<=maxY ) // cidade está dentro do bounding box
+			{
+				int i;
+				int j;
+				bool result = false;
+				while (halfEdge != nullptr)
+				{
+					if (halfEdge->origin != nullptr && halfEdge->destination != nullptr)
+					{
+						Vector2 origin = halfEdge->origin->point; // j
+						Vector2 dest = halfEdge->destination->point; // i
+						if ((dest.y > iCidade->lat) != (origin.y > iCidade->lat) &&
+							(iCidade->lon < (origin.x - dest.x) * (iCidade->lat - dest.y) / (origin.y-dest.y) + dest.x)) {
+							result = !result;
+						}
+					}
+					halfEdge = halfEdge->next;
+					if (halfEdge == start)
+						break;
+				}
+				if (result) // cidade está no polígono
+				{
+					if( iCidade->pop > maiorPop )
+					{
+						maiorPop = iCidade->pop;
+						maiorNome = iCidade->nome + "/" + iCidade->UF;
+						maiorLon = iCidade->lon;
+						maiorLat = iCidade->lat;
+					}
+				}
+			}
+		}
+		// escreve o nome da cidade no mapa
+		if( maiorPop > 0 )
+		{
+			osg::AutoTransform* at = new osg::AutoTransform;
+			at->setPosition( osg::Vec3(maiorLon,maiorLat,controller->pickDown( osg::Vec3d(maiorLon,maiorLat,1) )+0.2) );
+			at->setAutoRotateMode(osg::AutoTransform::ROTATE_TO_SCREEN);
+			at->addChild(createLabel(osg::Vec3(0,0,0),0.25,maiorNome,osgText::Text::XY_PLANE));
+			grpCidades->addChild(at);
+		}
+		/*while (halfEdge != nullptr)
+		{
+			if (halfEdge->origin != nullptr && halfEdge->destination != nullptr)
+			{
+				Vector2 origin = halfEdge->origin->point;
+				Vector2 dest = halfEdge->destination->point;
+				
+				//std::cout << origin.x << " " << origin.y << " " << dest.x << " " << dest.y << "\n";
+
+				// Linhas sobre o mapa
+				shpGeode = new osg::Geode();
+				linesGeom = new osg::Geometry();
+				vertices = new osg::Vec3Array;
+				vertices->push_back(osg::Vec3d(origin.x,origin.y,1));
+				vertices->push_back(osg::Vec3d(dest.x,dest.y,1));
+				linesGeom->setVertexArray(vertices);
+				osg::Vec4Array* colors = new osg::Vec4Array;
+				colors->push_back(osg::Vec4(0,0,0,1));
+				linesGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
+				osg::Vec3Array* normals = new osg::Vec3Array;
+				normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
+				linesGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
+				linesGeom->addPrimitiveSet(new osg::DrawArrays(osg::PrimitiveSet::LINE_STRIP,0,2));
+				shpGeode->addDrawable(linesGeom);
+				shpGeode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
+				grpVoronoi->addChild( shpGeode.get() );
+			}
+			halfEdge = halfEdge->next;
+			if (halfEdge == start)
+				break;
+		}*/
+    }
+}
+
 int main( int argc, char** argv )
 {
+	std::srand(std::time(0));
+	getLocais();
+	getCidades();
 	blocos = new osg::Group;
 	osg::ref_ptr<osg::Group> root = new osg::Group;
 	osg::ref_ptr<osg::Node> BRnode = osgDB::readNodeFile("BR.osgb");
@@ -830,7 +1263,6 @@ int main( int argc, char** argv )
 	// Viewer
 	osgViewer::Viewer viewer;
 	viewer.setSceneData( root.get() );
-	//osg::ref_ptr<OVNIController> controller = new OVNIController(&viewer);
 	controller = new OVNIController(&viewer);
 	viewer.setCameraManipulator(controller);
 	if( argc > 1 && strcmp( argv[1], "j" ) == 0 )
@@ -878,6 +1310,10 @@ int main( int argc, char** argv )
 	hudCamera->addChild( menu );
 	hudCamera->addChild( textGeode.get() );
 	root->addChild( hudCamera.get() );
+	// voronoi para selecionar maiores cidades de cada região
+	criaVoronoi(200);
+	root->addChild( grpVoronoi );
+	root->addChild( grpCidades );
 	while ( !viewer.done() )
 	{
 		calcAcc( &viewer );
@@ -891,6 +1327,4 @@ int main( int argc, char** argv )
 	return 0;
 }
 
-// g++ terreno1.cpp -losg -losgDB -losgFX -losgGA -losgText -losgUtil -losgViewer -o terreno1
-
-// g++ terreno1.cpp -Wl,-Bstatic -losg -losgDB -losgGA -losgText -losgUtil -losgViewer -o terreno1 (ainda não funciona)
+// g++ terreno1.cpp -licuuc -licui18n -losg -losgDB -losgGA -losgText -losgUtil -losgViewer -o terreno1
