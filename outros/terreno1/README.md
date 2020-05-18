@@ -113,9 +113,25 @@ Para mover um cubo, mude para o modo de mouse livre (Tab), clique nele com o bot
 
 A ideia é dominar essas técnicas para acrescentar e manipular tipos variados de objetos sobre o terreno. O próximo passo é dar nome a cada cubo usando algum Widget.
 
+### Identificar elementos da geografia, com nomes no HUD
+
+Duas bases estão sendo usadas:
+
+- locais_br.txt traz o nome e coordenadas de 33.829 localidades no país (todas com letras minúsculas e sem acentos).
+- cidades_br.txt traz nome, coordenadas, população e UF de 2.017 cidades brasileiras (com iniciais maiúsculas e acentos).
+
+As localidades são mostradas sempre que o mouse passa sobre o terreno (exceto quando um bloco está sendo carregado). Para isso criei a estrutura `Locais`, que é um "array" (mais especificamente, um `std::map`) de outro array semelhante, o primeiro guardando latitudes, o segundo guardando longitudes. Assim, os quase 34 mil locais são distribuídos em células de 1° x 1°, e o programa procura os nomes mais próximos do mouse apenas dentro da célula onde o mouse está. Deverá incluir também as células próximas, na maioria dos casos.
+
+Para as cidades, um diagrama de Voronoi é montado no início do programa, e apenas a maior cidade dentro de cada célula é mostrada (na função `createLabel`).
+
+![](terr1j1.jpg)
+
+![](terr1j2.jpg)
+
+![](terr1j3.jpg)
+
 ## Prioridade 1
 
-- Identificar elementos da geografia, com nomes no HUD
 - Compilar estaticamente para testar em outras máquinas, onde o OSG não esteja instalado.
 - Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
 - Modificar a textura do mapa dinamicamente
