@@ -130,8 +130,18 @@ Para as cidades, um diagrama de Voronoi é montado no início do programa, e ape
 
 ![](terr1j3.jpg)
 
+### Usando fontes diferentes e codificação UTF-8
+
+![](terr1k.jpg)
+
+### Procurar nomes dos locais também nas quadrículas ao redor da quadrícula atual
+
+Feito. Está dando `Segmentation fault` ocasionalmente, quando o mouse passa perto da borda do mapa e a câmera está perto do chão. Vou criar um sistema de log para investigar melhor as causas.
+
 ## Prioridade 1
 
+- Criar sistema de log
+- Aceitar parâmetros na linha de comando
 - Compilar estaticamente para testar em outras máquinas, onde o OSG não esteja instalado.
 - Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
 - Modificar a textura do mapa dinamicamente
