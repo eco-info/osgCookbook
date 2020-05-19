@@ -27,10 +27,11 @@
  . Nomes das cidades atrapalham ao apanhar objetos
  . Mostrar nomes de cidades e locais com acentuação (usar UTF-8)
  . Usar outras fontes no HUD (por hora só Charter.ttf)
+ . Criar sistema de log (não deve ser usado para informações a cada frame; para debug, usar std::cout)
  * Mostrar tipo de vegetação apontado pelo mouse
  * Ler parâmetros da linha de comando
 	* número de células Voronoi
-	* 
+	* velocidade do OVNI
  * Investigar memory leaks
  * Nomes das cidades sumindo atrás do terreno montanhoso (mostrar no HUD com coordenadas globais?)
  * Tamanho máximo dos nomes das cidades não deve ser tão grande (ou mostrar ponto exato da cidade com linha preta vertical)
@@ -52,13 +53,14 @@
  * mudar cálculos do handle para outro lugar?
  * mudar FirstPersonManipulator para StandardManipulator?
  * criar controlador a pé
- * Escrever informações para Log ao invés de cout, e ter opção de apagar log da anti-penúltima execução
  * Usar teclas PageUp para ganhar altitude, e PageDown para perder altitude
  * Usar teclas Shift para acelerar
  * Usar teclas QE para girar ao redor do eixo vertical (do mundo, não da câmera -- pois não há roll). Embora os movimentos horizontais do mouse já façam isso, pode fazer mais rápido, e também pode ser útil no MODO B
  * 
  */
 
+#include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -81,10 +83,21 @@
 #include <osgUtil/PrintVisitor>
 #include <osgViewer/Viewer>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 // https://github.com/pvigier/FortuneAlgorithm - Diagrama de Voronoi
 // https://pvigier.github.io/2018/11/18/fortune-algorithm-details.html
 #include "pvigier.h"
+
+std::string logFileName;
+
+void log( std::string msg )
+{
+	time_t t = time(nullptr);
+	struct tm t_tm = *std::localtime(&t);
+	std::ofstream outfile(logFileName.c_str(), std::ios_base::app);
+	outfile << std::put_time(&t_tm, "%H:%M:%S ") << msg << "\n";
+}
 
 /* create an ordinary camera node which will be rendered on the top after
 the main scene is drawn. It can be used to display some heads-up display (HUD) texts
@@ -692,11 +705,13 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 			osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
 			//std::cout << "intersect: " << hitr->drawable->getName() << " (" << hitr->drawable->className() << ")\n";
 			//hitr->drawable->accept( pv );
-			while ( strcmp( hitr->drawable->className(),"Text") == 0 ) // pula os textos
+			while ( hitr != intersections.end() && strcmp( hitr->drawable->className(),"Text") == 0 ) // pula os textos
 			{
 				hitr++;
 				//std::cout << "intersect: " << hitr->drawable->getName() << " (" << hitr->drawable->className() << ")\n";
 			}
+			if( hitr == intersections.end() )
+				return "";
 			ptrLat = hitr->getWorldIntersectPoint().y();
 			ptrLon = hitr->getWorldIntersectPoint().x();
 			ptrAlt = hitr->getWorldIntersectPoint().z();
@@ -1345,6 +1360,16 @@ void criaVoronoi(int n)
 
 int main( int argc, char** argv )
 {
+	// cria arquivo de log
+	mkdir("log", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH); // cria a pasta log, se não existir
+	time_t t = time(nullptr);
+	struct tm t_tm = *std::localtime(&t);
+	std::ostringstream t_ss;
+	t_ss << std::put_time(&t_tm, "%Y%m%d_%H%M%S");
+	std::string t_str = t_ss.str();
+	logFileName = "log/log_"+t_str+".txt";
+	// começa o programa
+	log("Começou");
 	std::srand(std::time(0));
 	getLocais();
 	getCidades();
@@ -1426,6 +1451,7 @@ int main( int argc, char** argv )
 		}
 		viewer.frame();
 	}
+	log("Terminou");
 	return 0;
 }
 
