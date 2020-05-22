@@ -15,6 +15,9 @@
  . Barra de espaço jogando pra posição inicial anterior
  - Trocar espaços no início das linhas por tabs (procurar "  " | Geany menu Edit|Preferences|Editor|Display|Show white space)
  - acrescentar luzes (luz não ficou direcional...)
+	We can treat osg::Light as a normal rendering attribute, too. For example, applying a
+	light object to the root node will also affect its sub-graph. However, there will be an obvious
+	difference if we don't make use of light sources. - Beginner's Guide p. 140
  - Inserir objetos 3d (podem representar grandes obras, problemas a resolver, etc) (definir a escala, textura, forma, etc)
  - desenhar shapefiles (ok, mas não serve pra UFs)
  . Identificar os objetos 3d com o mouse
@@ -28,14 +31,56 @@
  . Mostrar nomes de cidades e locais com acentuação (usar UTF-8)
  . Usar outras fontes no HUD (por hora só Charter.ttf)
  . Criar sistema de log (não deve ser usado para informações a cada frame; para debug, usar std::cout)
- * Mostrar tipo de vegetação apontado pelo mouse
- * Ler parâmetros da linha de comando
-	* número de células Voronoi
-	* velocidade do OVNI
+ . Mostrar tipo de vegetação apontado pelo mouse (cores no mapa não estão 100% fieis, cores espúrias aparecendo -- como lilás em Manaus !!)
+ . Ler parâmetros da linha de comando
+	. número de células Voronoi
+	. velocidade do OVNI
+ . Inserir billboards representando hidrelétricas, etc.
+ - Criar botões clicáveis no HUD (ligar e desligar bússola, linhas das UFs, etc)
+ / Fazer as iterações das interseções baseadas no nome dos objetos e não nas classes
+ * trocar Vec3d por Vec3f ou Vec3
+ * Mostrar o nome de cada billboard (hidrelétricas...) separadamente. E assim não inseri-los em Locais
+ * Inserir modelos 3d
+ * Inserir texturas nos modelos 3d
+ * Inserir texturas nos cubos
+ * Selecionar os cubos/modelos com texturas usando outlines (examples/osgoutline)
+ * Selecionar os cubos/modelos com texturas usando linhas brancas nos vértices (examples/osgscribe, Beginner's Guide p. 245: clicking and selecting geometries)
+ * Separar o código em classes
+	* OVNIController -> OVNIManipulator?
+	* Cidades: apresentam um texto em cima (texto preto para capitais?)
+	* Locais: aparecem quando passamos o mouse no mapa
+	* Estruturas/Locais (pontos) com billboard, como hidrelétricas
+	* Estruturas/Locais (linhas) com shapefiles? com decalque?
+	* Estruturas/Locais (áreas) com shapefiles? com decalque? (UFs, UCs, TIs...)
+	* HUD
+ * Tirar cidades menores que X habitantes ??
  * Investigar memory leaks
+ * Investigar bottlenecks de desempenho e como melhorá-los (osgUtil::Optimizer ??)
  * Nomes das cidades sumindo atrás do terreno montanhoso (mostrar no HUD com coordenadas globais?)
+
+// https://groups.google.com/forum/#!searchin/osg-users/displaying$20icons|sort:relevance/osg-users/3hXkQ5jXo9I/Vaepg8TrFV8J
+	To display a node on top of the other, I think you can set off the depth buffer test and put it into a render bin up all the others (> 10, since it is the transparent bin, if I remember) to draw them at the end. It's all done via StateSet, you should find them easily.
+		ou
+	To translate objects from object coordinates to screen coordinates you
+	must multiple it by a series of matrices in turn, these
+	multiplications can all be wrapped up into a single matrices.  The
+	order of transformation is:
+	  world_coordinate = object_coordinate * world_matrix;
+	  eye_coordinate = world_coordinate * view_matrix;
+	  clipspace_coordinate = eye_coordinate * projection_matrix;
+	  window_coordindates = clipspace_coordinate * viewport_matrix;
+	These can be put together thus:
+	  window_coordinate = object_coordinate * (world_matrix * view_matrix
+	* projection_matrix * viewport_matrix);
+	The world_matrix can be obtained from the node->getWorldMatrices()
+	which provides a list of matrices, as and Node can have multiple
+	parent paths and be in have multiple world transforms placing it in
+	space.  The rest of the matrices come from the Camera that you wish to
+	get the window coords from, here it'll be camera->getViewMatrix() *
+	camera->getProjectionMatrix() *
+	camera->getViewport()->computeWindowMatrix();
+
  * Tamanho máximo dos nomes das cidades não deve ser tão grande (ou mostrar ponto exato da cidade com linha preta vertical)
- * Fazer as iterações das interseções baseadas no nome dos objetos e não nas classes
  * Se 2 ou mais cidades estiverem muito próximas (? km) uma da outra, mostrar só a maior delas
  * Dar nome aos objetos 3d dentro do jogo (osgWidget::Input?)
  * UFs com decalque, overlay, shaders, mudança da textura... ?
@@ -44,7 +89,6 @@
  * Intro: aproximando velozmente do "infinito", desacelerando até a posição inicial sobre o país (osglight.cpp:130)
  * Fazer a velocidade do movimento não depender dos FPS
  * Testar em outro PC, sem OSG instalado (precisa compilar usando -static)
- * Criar botões clicáveis no HUD (ligar e desligar bússola, linhas das UFs, etc)
  * Bússola e outros elementos devem escalar com o tamanho da janela? Quanto?
  * Usar mapa com oceano azul
  * Calcular altitude real
@@ -56,9 +100,11 @@
  * Usar teclas PageUp para ganhar altitude, e PageDown para perder altitude
  * Usar teclas Shift para acelerar
  * Usar teclas QE para girar ao redor do eixo vertical (do mundo, não da câmera -- pois não há roll). Embora os movimentos horizontais do mouse já façam isso, pode fazer mais rápido, e também pode ser útil no MODO B
+ * osgEarth?
  * 
  */
 
+#include <algorithm>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -81,6 +127,7 @@
 #include <osgText/Text>
 #include <osgUtil/LineSegmentIntersector>
 #include <osgUtil/PrintVisitor>
+#include <osgUtil/SmoothingVisitor>
 #include <osgViewer/Viewer>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -88,6 +135,174 @@
 // https://github.com/pvigier/FortuneAlgorithm - Diagrama de Voronoi
 // https://pvigier.github.io/2018/11/18/fortune-algorithm-details.html
 #include "pvigier.h"
+
+#include "png.h" // ou usar osg::Image ??
+
+int pngW, pngH;
+png_byte color_type;
+/*
+#define PNG_COLOR_TYPE_GRAY 0
+#define PNG_COLOR_TYPE_PALETTE  (PNG_COLOR_MASK_COLOR | PNG_COLOR_MASK_PALETTE)
+#define PNG_COLOR_TYPE_RGB        (PNG_COLOR_MASK_COLOR)
+#define PNG_COLOR_TYPE_RGB_ALPHA  (PNG_COLOR_MASK_COLOR | PNG_COLOR_MASK_ALPHA)
+#define PNG_COLOR_TYPE_GRAY_ALPHA (PNG_COLOR_MASK_ALPHA)
+// aliases
+#define PNG_COLOR_TYPE_RGBA  PNG_COLOR_TYPE_RGB_ALPHA
+#define PNG_COLOR_TYPE_GA  PNG_COLOR_TYPE_GRAY_ALPHA
+*/
+png_byte bit_depth;
+png_bytep *row_pointers = NULL;
+
+/*
+	bit_depth
+		holds the bit depth of one of the image channels
+		valid values are 1, 2, 4, 8, 16 and depend also on the color_type
+	color_type
+		describes which color/alpha channels are present
+		0 PNG_COLOR_TYPE_GRAY
+			(bit depths 1, 2, 4, 8, 16)
+		1 PNG_COLOR_TYPE_PALETTE
+			(bit depths 1, 2, 4, 8)
+		2 PNG_COLOR_TYPE_RGB
+			(bit_depths 8, 16)
+		3 PNG_COLOR_TYPE_RGB_ALPHA
+			(bit_depths 8, 16)
+		4 PNG_COLOR_TYPE_GRAY_ALPHA
+			(bit depths 8, 16)
+*/
+
+void read_png_file(const char *filename) {
+	FILE *fp = fopen(filename, "rb");
+	png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	if(!png) abort();
+	png_infop info = png_create_info_struct(png);
+	if(!info) abort();
+	if(setjmp(png_jmpbuf(png))) abort();
+	png_init_io(png, fp);
+	png_read_info(png, info);
+	pngW       = png_get_image_width(png, info);
+	pngH       = png_get_image_height(png, info);
+	color_type = png_get_color_type(png, info);
+	bit_depth  = png_get_bit_depth(png, info);
+	// Read any color_type into 8bit depth, RGBA format.
+	// See http://www.libpng.org/pub/png/libpng-manual.txt
+	if(bit_depth == 16)
+		png_set_strip_16(png);
+	if(color_type == PNG_COLOR_TYPE_PALETTE)
+		png_set_palette_to_rgb(png);
+	// PNG_COLOR_TYPE_GRAY_ALPHA is always 8 or 16bit depth.
+	if(color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
+		png_set_expand_gray_1_2_4_to_8(png);
+	if(png_get_valid(png, info, PNG_INFO_tRNS))
+		png_set_tRNS_to_alpha(png);
+	// These color_type don't have an alpha channel then fill it with 0xff.
+	if(color_type == PNG_COLOR_TYPE_RGB || color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_PALETTE)
+		png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
+	if(color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+		png_set_gray_to_rgb(png);
+	png_read_update_info(png, info);
+	if (row_pointers) abort();
+	row_pointers = (png_bytep*)malloc(sizeof(png_bytep) * pngH);
+	for(int y = 0; y < pngH; y++) {
+		row_pointers[y] = (png_byte*)malloc(png_get_rowbytes(png,info));
+	}
+	png_read_image(png, row_pointers);
+	fclose(fp);
+	png_destroy_read_struct(&png, &info, NULL);
+}
+
+/*
+1	Tree cover, broadleaved, evergreen
+2	Tree cover, broadleaved. deciduous closed
+3	Tree cover, broadleaved, deciduous, open
+4	Tree cover needle-leaved, evergreen
+5	Tree cover needleleaved, deciduous
+6	Tree cover, mixed leaf type
+7	Tree cover, regularly flooded, fresh water
+8	Tree cover, regularly flooded saline water
+9	Mosaic: Tree Cover / Other natural vegetation
+10	Tree Cover, burnt
+11	Shrub Cover, closed-open, evergreen
+12	Shrub Cover, closed-open, deciduous
+13	Herbaceous Cover, closed-open
+14	Sparse herbaceous or sparse shrub cover
+15	Regularly flooded shrub and/or herbaceous cover
+16	Cultivated and managed areas
+17	Mosaic: Cropland / Tree Cover / Other natural vegetation
+18	Mosaic: Cropland / Shrub and/or grass cover
+19	Bare Areas
+20	Water Bodies
+21	Snow and Ice
+22	Artificial surfaces and associated areas
+23	No Data
+*/
+std::string biomas[] = {"Floresta ombrófila sempre verde","Floresta ombrófila decídua","Floresta temperada/mista","Floresta inundável (água doce)/várzea/igapó",
+						"Floresta inundável (água salgada)/mangue","Árvores/outra vegetação natural","Cobertura arbustiva","Cobertura herbácea",
+						"Cobertura arbustiva/herbácea esparsa","Cobertura arbustiva/herbácea inundável","Área cultivada","Cultivo/árvores/outra vegetação natural",
+						"Cultivo/arbustos/gramíneas","Solo nu (areia/gelo/neve)","Água","Área urbana","Árvores queimadas"};
+std::string rgb[] = {"79ff79","caff4c","6bc3c8","46ac46",
+					"ba69c0","c3834a","ffc549","ffddce",
+					"fff9a5","c1c1ff","ffffff","ba875a",
+					"c4ba69","d2d2d2","7979ff","444444","ff0000"};
+					//"c4ba69","d2d2d2","69acff","505050","ff0000"};
+
+std::string get_png_pixel(int x, int y)
+{
+	png_bytep row = row_pointers[y];
+	if (color_type == 2 && bit_depth == 8)
+	{
+		png_bytep px = &(row[x * 4]); // se não tem alpha, pq 4 ??
+		std::stringstream R, G, B;
+		R << std::setfill('0') << std::setw(2) << std::hex << (int)px[0];
+		G << std::setfill('0') << std::setw(2) << std::hex << (int)px[1];
+		B << std::setfill('0') << std::setw(2) << std::hex << (int)px[2];
+		std::string RGB = R.str() + G.str() + B.str();
+		std::string* rgbitr = std::find(rgb,rgb+17,RGB);
+		if (rgbitr != rgb+17)
+			return biomas[std::distance(rgb,rgbitr)];
+		else
+			return "";
+	}
+	return "";
+}
+
+/* Itens de interesse nos locais
+
+table(loc$nm_classe[which(loc$tp_geom == 'Ponto')])
+74		barragem
+27		capital
+102		complexo_portuario
+1177	elemento_fisiografico_natural ??
+373		est_gerad_energia_eletrica
+2788	ext_mineral
+155		foz_maritima
+310		hidreletrica
+85		pico
+1478	pista_ponto_pouso ?
+98		subest_transm_distrib_energia_eletrica
+63		termeletrica
+
+table(loc$nm_classe[which(loc$tp_geom == 'Linha')]) // converter pra shapefile? usar centróide?
+778		barragem
+2551	elemento_fisiografico_natural ??
+122		foz_maritima
+609635	trecho_drenagem (existe shapefile próprio)
+760		trecho_energia
+1842	trecho_ferroviario
+15058	trecho_hidroviario
+44407	trecho_rodoviario
+
+table(loc$nm_classe[which(loc$tp_geom == 'Area')]) // shp = shapefiles (provavelmente melhores) disponíveis
+507		ext_mineral					shp
+1		foz_maritima
+2164	ilha
+7687	massa_dagua
+444		terra_indigena				shp
+202		terreno_sujeito_inundacao
+321		unidade_protecao_integral	shp
+943		unidade_protegida			shp
+555		unidade_uso_sustentavel		shp
+*/
 
 std::string logFileName;
 
@@ -110,7 +325,9 @@ osg::Camera* createHUDCamera( double left, double right, double bottom, double t
 	camera->setRenderOrder( osg::Camera::POST_RENDER );
 	camera->setAllowEventFocus( false );
 	camera->setProjectionMatrix( osg::Matrix::ortho2D(left, right, bottom, top) );
-	camera->getOrCreateStateSet()->setMode( GL_LIGHTING, osg::StateAttribute::OFF );
+	//camera->setProjectionMatrixAsOrtho( left, right, bottom, top, 100, -100 ); // não funcionou. Os valores Z (texto e menu do HUD) precisam ficar entre 0 e -1
+	camera->getOrCreateStateSet()->setMode( GL_LIGHTING, osg::StateAttribute::OFF ); // necessário aqui ??
+	camera->setName("cameraHUD");
 	return camera.release();
 }
 
@@ -123,6 +340,7 @@ osgText::Text* createText( const osg::Vec3& pos, const std::string& content, flo
 	text->setFont( g_font.get() );
 	text->setCharacterSize( size );
 	text->setAxisAlignment( osgText::TextBase::XY_PLANE );
+	text->setBackdropType(osgText::Text::DROP_SHADOW_BOTTOM_RIGHT);
 	text->setPosition( pos );
 	text->setText( content );
 	return text.release();
@@ -196,13 +414,150 @@ osg::ref_ptr<osg::PositionAttitudeTransform> menu;
 osg::ref_ptr<osg::Group> blocos;
 osg::ref_ptr<osg::Group> grpVoronoi;
 osg::ref_ptr<osg::Group> grpCidades;
+osg::ref_ptr<osg::Group> grpHidreletrica;
+osg::ref_ptr<osg::Group> grpIndigena;
 osg::Geode* selecionado = nullptr;
+osg::ref_ptr<osg::Billboard> geodeHidreletrica;
+osg::ref_ptr<osg::Billboard> geodeIndigena;
+//osg::ref_ptr<osg::MatrixTransform> mtHidreletrica;
 osgUtil::PrintVisitor pv( std::cout );
+int nVoronoi = 200;
+float ovniSpeed = 10;
+osg::ref_ptr<osg::Geode> botaoHover;
+bool hoverHidreletrica = false;
+bool hoverIndigena = false;
 
 bool FileExists(std::string strFilename)
 {
 	struct stat stFileInfo;
 	return (stat(strFilename.c_str(),&stFileInfo) == 0);
+}
+
+// cubo com textura - https://groups.google.com/forum/#!searchin/osg-users/textured$20cube|sort:date/osg-users/8x7LdKUQlRM/008IWsokAwAJ
+
+/*osg::Geometry* criaCubo() {
+	osg::ref_ptr<osg::Vec3Array> vertices = new osg::Vec3Array;
+	osg::ref_ptr<osg::Vec2Array> texcoords = new osg::Vec2Array();
+	osg::ref_ptr<osg::Vec3Array> normals = new osg::Vec3Array;
+
+	// ------ top (front?)
+	vertices->push_back(osg::Vec3(0.0f, 0.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 0.0f, 1.0f));
+	vertices->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	normals->push_back(osg::Vec3(0.0f,-1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f,-1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f,-1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f,-1.0f, 0.0f));
+	texcoords->push_back( osg::Vec2(0.0f, 0.0f) );
+	texcoords->push_back( osg::Vec2(0.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 0.0f) );
+
+	// ------ top (front?)
+	vertices->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	vertices->push_back(osg::Vec3(1.0f, 0.0f, 1.0f));
+	vertices->push_back(osg::Vec3(1.0f, 1.0f, 1.0f));
+	vertices->push_back(osg::Vec3(0.0f, 1.0f, 1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	texcoords->push_back( osg::Vec2(0.0f, 0.0f) );
+	texcoords->push_back( osg::Vec2(0.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 0.0f) );
+
+	// ------ back
+	vertices->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 1.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 1.0f, 1.0f));
+	vertices->push_back(osg::Vec3(0.0f, 1.0f, 1.0f));
+	normals->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	texcoords->push_back( osg::Vec2(0.0f, 0.0f) );
+	texcoords->push_back( osg::Vec2(0.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 0.0f) );
+
+	// ------ Bottom
+	vertices->push_back(osg::Vec3(0.0f, 0.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 1.0f, 0.0f));
+	vertices->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, -1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, -1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, -1.0f));
+	normals->push_back(osg::Vec3(0.0f, 0.0f, -1.0f));
+	texcoords->push_back( osg::Vec2(0.0f, 0.0f) );
+	texcoords->push_back( osg::Vec2(0.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 0.0f) );
+
+	// ------ Left
+	vertices->push_back(osg::Vec3(0.0f, 0.0f, 0.0f));
+	vertices->push_back(osg::Vec3(0.0f, 1.0f, 0.0f));
+	vertices->push_back(osg::Vec3(0.0f, 1.0f, 1.0f));
+	vertices->push_back(osg::Vec3(0.0f, 0.0f, 1.0f));
+	normals->push_back(osg::Vec3(-1.0f, 0.0f, 0.0f));
+	normals->push_back(osg::Vec3(-1.0f, 0.0f, 0.0f));
+	normals->push_back(osg::Vec3(-1.0f, 0.0f, 0.0f));
+	normals->push_back(osg::Vec3(-1.0f, 0.0f, 0.0f));
+	texcoords->push_back( osg::Vec2(0.0f, 0.0f) );
+	texcoords->push_back( osg::Vec2(0.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 0.0f) );
+
+	// ------ Right
+	vertices->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 1.0f, 0.0f));
+	vertices->push_back(osg::Vec3(1.0f, 1.0f, 1.0f));
+	vertices->push_back(osg::Vec3(1.0f, 0.0f, 1.0f));
+	normals->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	normals->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	normals->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	normals->push_back(osg::Vec3(1.0f, 0.0f, 0.0f));
+	texcoords->push_back( osg::Vec2(0.0f, 0.0f) );
+	texcoords->push_back( osg::Vec2(0.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 1.0f) );
+	texcoords->push_back( osg::Vec2(1.0f, 0.0f) );
+
+	osg::ref_ptr<osg::Geometry> geom = new osg::Geometry;
+	geom->setVertexArray(vertices);
+	geom->setNormalArray(normals, osg::Array::Binding::BIND_PER_VERTEX);
+	geom->addPrimitiveSet( new osg::DrawArrays(GL_QUADS, 0, 24));
+	geom->setTexCoordArray(0, texcoords.get());
+	osgUtil::SmoothingVisitor::smooth(*geom);
+
+	geom->setTexCoordArray(0, texcoords.get(), osg::Array::Binding::BIND_PER_VERTEX);
+
+	osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
+	osg::ref_ptr<osg::Image> image = osgDB::readImageFile("texture/1K-wood_parquet_2/1K-wood_parquet_2-diffuse.jpg");
+	texture->setImage(image);
+	texture->setUnRefImageDataAfterApply(true);
+	
+	return geom.release();
+}*/
+
+// cria textura para Hidrelétricas, ...
+float escalaIcone = 0.2; // com imagem "icons/*.png" de 512x512 pixels
+
+osg::Geometry* createQuad(const char* fName, const char* name)
+{
+	osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D;
+	osg::ref_ptr<osg::Image> image = osgDB::readImageFile( fName );
+	texture->setImage( image.get() ); // qual a diferença entre image e image.get() aqui ?? Ambos funcionam
+	osg::ref_ptr<osg::Geometry> quad = osg::createTexturedQuadGeometry(
+		osg::Vec3(-escalaIcone/2, 0.0f,-escalaIcone/2), // -metade da largura e altura (abaixo)
+		osg::Vec3(escalaIcone,0.0f,0.0f),		// largura
+		osg::Vec3(0.0f,0.0f,escalaIcone) );		// altura
+	osg::StateSet* ss = quad->getOrCreateStateSet();
+	ss->setTextureAttributeAndModes( 0, texture.get() );
+	ss->setMode( GL_LIGHTING, osg::StateAttribute::OFF );
+	quad->setName(name);
+	return quad.release();
 }
 
 void getLocais(void)
@@ -234,7 +589,7 @@ void getLocais(void)
 		std::ifstream flocais(std::string("data/locais_br_2019.csv").c_str());
 		if (flocais.is_open())
 		{
-			std::string linha, nome;
+			std::string linha, nome, nomeCateg, nomeClasse, uf;
 			size_t pos;
 			float lat, lon;
 			int intlat, intlon, numLocais=0;
@@ -244,6 +599,11 @@ void getLocais(void)
 			tipoLons* pLons;
 			tipoLons::iterator iLons;
 			tipoLats::iterator iLats;
+
+			// cria símbolos das hidrelétricas, terras indígenas...
+			osg::Geometry* quadHidreletrica = createQuad("icons/hidreletrica.png","QuadHidrelétrica");
+			osg::Geometry* quadIndigena = createQuad("icons/indigena.png","QuadIndígena");
+
 			std::getline(flocais,linha); // pula a linha de título
 			while (!flocais.eof())
 			{
@@ -259,7 +619,39 @@ void getLocais(void)
 
 				pos = linha.find('\t');
 				lon = atof(linha.substr(0,pos).c_str());
+				linha = linha.substr(pos+1);
+
+				pos = linha.find('\t');
+				nomeCateg = linha.substr(0,pos);
+				linha = linha.substr(pos+1);
+
+				pos = linha.find('\t');
+				nomeClasse = linha.substr(0,pos);
+				uf = linha.substr(pos+1);
 				
+				if( nomeClasse == "hidreletrica" )
+				{
+					geodeHidreletrica = new osg::Billboard;
+					geodeHidreletrica->setMode( osg::Billboard::POINT_ROT_EYE );
+					geodeHidreletrica->setName(nome);
+					geodeHidreletrica->addDrawable( quadHidreletrica, osg::Vec3( lon, lat, controller->pickDown( osg::Vec3d(lon,lat,1) )+escalaIcone/2 ) );
+					osg::StateSet* ss = geodeHidreletrica->getOrCreateStateSet();
+					ss->setRenderingHint( osg::StateSet::TRANSPARENT_BIN );
+					grpHidreletrica->addChild( geodeHidreletrica );
+				}
+				else
+				if( nomeClasse == "terra_indigena" )
+				{
+					geodeIndigena = new osg::Billboard;
+					geodeIndigena->setMode( osg::Billboard::POINT_ROT_EYE );
+					geodeIndigena->setName(nome);
+					geodeIndigena->addDrawable( quadIndigena, osg::Vec3( lon, lat, controller->pickDown( osg::Vec3d(lon,lat,1) )+escalaIcone/2 ) );
+					osg::StateSet* ss = geodeIndigena->getOrCreateStateSet();
+					ss->setRenderingHint( osg::StateSet::TRANSPARENT_BIN );
+					grpIndigena->addChild( geodeIndigena );
+				}
+				
+				// insere local nos mapas de busca
 				intlat = floor(lat);
 				intlon = floor(lon);
 				// search Latitude
@@ -614,7 +1006,7 @@ bool OVNIController::handle(const osgGA::GUIEventAdapter &ea, osgGA::GUIActionAd
 	bussola->setAttitude(osg::Quat(osg::inDegrees(-hpr.x()),osg::Vec3d(0,0,1)));
 	text->setText( "OVNI lat:lon:alt " + eyeY.str() + ":" + eyeX.str() + ":" + eyeZ.str() + "\n" + pickStr, osgText::String::ENCODING_UTF8 );
 
-	eyePos += camRotation * camSpeed * camAlt/20; // * camAlt/10 faz a velocidade aumentar com a altitude
+	eyePos += camRotation * camSpeed * ovniSpeed/10 * camAlt/20; // * camAlt/10 faz a velocidade aumentar com a altitude
 	matrix.setTrans(eyePos);
 	// Check [mainTimer.time % (time divisor) == 0]
 	if (mainTimer.time_s() >= maxTick) // ??
@@ -702,19 +1094,67 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 		}
 		else // não está arrastando nenhum Box
 		{
+			hoverHidreletrica = false;
+			hoverIndigena = false;
 			osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
-			//std::cout << "intersect: " << hitr->drawable->getName() << " (" << hitr->drawable->className() << ")\n";
-			//hitr->drawable->accept( pv );
-			while ( hitr != intersections.end() && strcmp( hitr->drawable->className(),"Text") == 0 ) // pula os textos
+			while( hitr != intersections.end() && hitr->drawable->getName().compare("GeometryMenu") != 0 ) // procura menu
 			{
 				hitr++;
-				//std::cout << "intersect: " << hitr->drawable->getName() << " (" << hitr->drawable->className() << ")\n";
+			}
+			if( hitr != intersections.end() ) // chegou no menu
+			{
+				while( hitr != intersections.end() && hitr->drawable->getName().compare("GeometryBotao") != 0 ) // procura botões do menu
+				{
+					hitr++;
+				}
+				if( hitr != intersections.end() ) // chegou num botão
+				{
+					osg::NodePath path = hitr->nodePath;
+					for( osg::NodePath::const_iterator hitNode = path.begin(); hitNode != path.end(); ++hitNode)
+					{
+						if( strcmp( (*hitNode)->className(), "Geode" ) == 0 )
+						{
+							if ( (*hitNode)->getName().compare("Hidrelétrica") == 0 )
+							{
+								hoverHidreletrica = true;
+								botaoHover = dynamic_cast<osg::Geode*>(*hitNode);
+								return "Botão: Hidrelétrica";
+							}
+							else
+							if ( (*hitNode)->getName().compare("Terra Indígena") == 0 )
+							{
+								hoverIndigena = true;
+								botaoHover = dynamic_cast<osg::Geode*>(*hitNode);
+								return "Botão: Terra Indígena";
+							}
+						}
+					}
+					return "Botão não identificado";
+				}
+				return "Menu";
+			}
+			// se não for menu, olha de novo as interseções, do início
+			hitr = intersections.begin();
+			while( hitr != intersections.end() &&
+					(strcmp( hitr->drawable->className(),"Text") == 0 || hitr->drawable->getName().compare("GeometryBussola") == 0) ) // pula textos e bússola
+			{
+				hitr++;
+				/*if( hitr != intersections.end() )
+				{
+					std::cout << "2intersect: " << hitr->drawable->getName() << " (" << hitr->drawable->className() << ")\n";
+					hitr->drawable->accept( pv );
+				}*/
 			}
 			if( hitr == intersections.end() )
 				return "";
+			int pngX, pngY;
+			std::string bioma;
 			ptrLat = hitr->getWorldIntersectPoint().y();
 			ptrLon = hitr->getWorldIntersectPoint().x();
 			ptrAlt = hitr->getWorldIntersectPoint().z();
+			pngX = pngW*(ptrLon-lonMin)/(lonMax-lonMin);
+			pngY = pngH*(latMax-ptrLat)/(latMax-latMin);
+			bioma = get_png_pixel(pngX,pngY);
 			ptrX << std::fixed << std::setprecision(1) << ptrLon;
 			ptrY << std::fixed << std::setprecision(1) << ptrLat;
 			ptrZ << std::fixed << std::setprecision(2) << ptrAlt;
@@ -724,7 +1164,8 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 			for( osg::NodePath::const_iterator hitNode = path.begin(); hitNode != path.end(); ++hitNode)
 			{
 				//std::cout << "hitNode: " << (*hitNode)->getName() << " (" << (*hitNode)->className() << ")\n";
-				if( strcmp( (*hitNode)->className(),"Geode" ) == 0 || strcmp( (*hitNode)->className(),"Terrain" ) == 0 )
+				if( strcmp( (*hitNode)->className(),"Geode" ) == 0 || strcmp( (*hitNode)->className(),"Terrain" ) == 0 ||
+					strcmp( (*hitNode)->className(),"Billboard" ) == 0 )
 				{
 					nome = (*hitNode)->getName();
 					achou = true;
@@ -751,7 +1192,7 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 							}
 						}
 					}
-					else // Terrain
+					else // Terrain ou Billboard
 					{
 						if( selecionado != nullptr)
 						{
@@ -785,7 +1226,6 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 				{
 					// nenhum ponto nessa quadrícula (1° x 1°) - procura nas quadrículas ao redor
 					tipoP P[8];
-					//std::cout << intlat << "," << intlon << " (" << ptrLat << "|" << ptrLon << ")\n";
 					if (Locais.find(intlat-1) != Locais.end())
 					{
 						if (Locais.find(intlat-1)->second.find(intlon-1) != Locais.find(intlat-1)->second.end())
@@ -808,18 +1248,15 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 						if (Locais.find(intlat+1)->second.find(intlon+1) != Locais.find(intlat+1)->second.end())
 							P[7] = Locais.find(intlat+1)->second.find(intlon+1)->second;
 					}
-					//std::cout << "1\n";
 					nomeLoc = "Local: " + getLocMaisPerto2(P,ptrLon,ptrLat); // está copiando os dados de P ou passando por referência ??
-					//std::cout << "2\n";
 				}
 			}
 			else
 				nomeLoc = "Local: Indefinido";
-
 			if( achou )
-				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nomeLoc + "\n" + nome;
+				return "Cursor lat:lon:alt: " + ptrY.str() + ":" + ptrX.str() + ":" + ptrZ.str() + "\n" + nomeLoc + "\n" + bioma + " (" + nome + ")";
 			else
-				return "Cursor lat:lon:alt: " + ptrX.str() + ":" + ptrY.str() + ":" + ptrZ.str() + "\n" + nomeLoc;
+				return "Cursor lat:lon:alt: " + ptrY.str() + ":" + ptrX.str() + ":" + ptrZ.str() + "\n" + nomeLoc + "\n" + bioma;
 		}
 	}
 	else
@@ -859,6 +1296,18 @@ bool OVNIController::handleMousePush(const osgGA::GUIEventAdapter &ea, osgGA::GU
 	flushMouseEventStack();
 	addMouseEvent( ea );
 	unsigned int buttonMask = _ga_t0->getButtonMask();
+	if( hoverHidreletrica && buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON ) // clicou no botão da hidrelétrica
+	{
+		grpHidreletrica->setNodeMask(!grpHidreletrica->getNodeMask());
+		botaoHover->getOrCreateStateSet()->setMode(GL_BLEND, !botaoHover->getOrCreateStateSet()->getMode(GL_BLEND)); // inverte a transparência
+	}
+	else
+	if( hoverIndigena && buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON ) // clicou no botão da terra indígena
+	{
+		grpIndigena->setNodeMask(!grpIndigena->getNodeMask());
+		botaoHover->getOrCreateStateSet()->setMode(GL_BLEND, !botaoHover->getOrCreateStateSet()->getMode(GL_BLEND)); // inverte a transparência
+	}
+	else
 	if( selecionado && mouseFree )
 	{
 		osg::ShapeDrawable* shpDrb = dynamic_cast<osg::ShapeDrawable*>(selecionado->getChild(0));
@@ -1090,6 +1539,58 @@ void calcAcc(osgViewer::Viewer* viewer) // calcula aceleração do OVNI
 	}
 }
 
+osg::PositionAttitudeTransform* criaBotao( const char* fName, const char* name, int n )
+{
+	osg::ref_ptr<osg::Image> image = osgDB::readRefImageFile( fName );
+	if (!image)
+		return nullptr;
+	osg::Geometry* polyGeom = new osg::Geometry();
+	int bussP = 256; // porque compass.png é 512x512 pixels
+	osg::Vec3 myCoords[] =
+	{
+		osg::Vec3(-bussP,bussP,0),
+		osg::Vec3(-bussP,-bussP,0),
+		osg::Vec3(bussP,-bussP,0),
+		osg::Vec3(bussP,bussP,0)
+	};
+	polyGeom->setVertexArray(new osg::Vec3Array(4,myCoords));
+	osg::Vec4Array* colors = new osg::Vec4Array;
+	colors->push_back(osg::Vec4(1.0f,1.0f,1.0f,1.0f)); // 0.5 no final deixa translúcido
+	polyGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
+	osg::Vec3Array* normals = new osg::Vec3Array;
+	normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
+	polyGeom->setNormalArray(normals, osg::Array::BIND_OVERALL);
+	osg::Vec2 myTexCoords[] =
+	{
+		osg::Vec2(0,1),
+		osg::Vec2(0,0),
+		osg::Vec2(1,0),
+		osg::Vec2(1,1)
+	};
+	polyGeom->setTexCoordArray(0,new osg::Vec2Array(4,myTexCoords));
+	unsigned short myIndices[] = { 0, 1, 3, 2 };
+	polyGeom->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLE_STRIP,4,myIndices));
+	osg::StateSet* stateset = new osg::StateSet;
+	osg::Texture2D* texture = new osg::Texture2D;
+	texture->setImage(image);
+	stateset->setTextureAttributeAndModes(0, texture,osg::StateAttribute::ON);
+	polyGeom->setStateSet(stateset);
+	polyGeom->setName("GeometryBotao");
+	osg::Geode* geode = new osg::Geode();
+	geode->addDrawable(polyGeom);
+	geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
+	geode->getOrCreateStateSet()->setMode(GL_BLEND, osg::StateAttribute::OFF);
+	geode->setName(name);
+
+	osg::ref_ptr<osg::PositionAttitudeTransform> botao = new osg::PositionAttitudeTransform();
+	float escala = windowH/9000.0f;
+	botao->setPosition(osg::Vec3d(windowW/2 + n*escala*600,-40,0));
+	botao->setScale(osg::Vec3(escala,escala,escala));
+	botao->addChild(geode);
+	botao->setName("patBotao");
+	return botao.release();
+}
+
 void criaMenus() // examples/osggeometry/osggeometry.cpp
 {
 	osg::Geometry* polyGeom = new osg::Geometry();
@@ -1104,7 +1605,7 @@ void criaMenus() // examples/osggeometry/osggeometry.cpp
 	};
 	polyGeom->setVertexArray(new osg::Vec3Array(4,myCoords));
 	osg::Vec4Array* colors = new osg::Vec4Array;
-	colors->push_back(osg::Vec4(0,0,0,0.5)); // alpha 0.5 = translúcido
+	colors->push_back(osg::Vec4(0.0f,0.0f,0.0f,0.5f)); // 0.5 = translúcido
 	polyGeom->setColorArray(colors, osg::Array::BIND_OVERALL);
 	osg::Vec3Array* normals = new osg::Vec3Array;
 	normals->push_back(osg::Vec3(0.0f,-1.0f,0.0f));
@@ -1121,14 +1622,20 @@ void criaMenus() // examples/osggeometry/osggeometry.cpp
 	polyGeom->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLE_STRIP,4,myIndices));
 	osg::StateSet* stateset = new osg::StateSet;
 	stateset->setMode(GL_BLEND, osg::StateAttribute::ON); // deixa fundo do PNG transparente
+	stateset->setRenderingHint( osg::StateSet::TRANSPARENT_BIN );
 	polyGeom->setStateSet(stateset);
+	polyGeom->setName("GeometryMenu");
 	osg::Geode* geode = new osg::Geode();
 	geode->addDrawable(polyGeom);
 	geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
+	geode->setName("GeodeMenu");
 	menu = new osg::PositionAttitudeTransform();
 	menu->setNodeMask(0); // menu começa oculto
-	menu->setPosition(osg::Vec3d(0,windowH,-1));
+	menu->setPosition(osg::Vec3d(0,windowH,-0.6f)); // com 1 no final não aparece na tela; com -1 no final não aparece no pick, com 0 no final o texto não aparece sobre o menu !!
+	menu->addChild( criaBotao("icons/hidreletrica.png", "Hidrelétrica", 0) );
+	menu->addChild( criaBotao("icons/indigena.png", "Terra Indígena", 1) );
 	menu->addChild(geode);
+	menu->setName("patMenu");
 }
 
 void criaBussola() // examples/osggeometry/osggeometry.cpp
@@ -1168,9 +1675,11 @@ void criaBussola() // examples/osggeometry/osggeometry.cpp
 	stateset->setTextureAttributeAndModes(0, texture,osg::StateAttribute::ON);
 	stateset->setMode(GL_BLEND, osg::StateAttribute::ON); // deixa fundo do PNG transparente
 	polyGeom->setStateSet(stateset);
+	polyGeom->setName("GeometryBussola");
 	osg::Geode* geode = new osg::Geode();
 	geode->addDrawable(polyGeom);
 	geode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED);
+	geode->setName("GeodeBussola");
 	bussola = new osg::PositionAttitudeTransform();
 	bussola->setPosition(osg::Vec3d(windowW-bussP,bussP,0));
 	bussola->addChild(geode);
@@ -1219,7 +1728,6 @@ void criaVoronoi(int n)
 		points.push_back( Vector2{ lonMin + (lonMax-lonMin)*(double)rand()/(double)RAND_MAX ,
 									latMin + (latMax-latMin)*(double)rand()/(double)RAND_MAX } );
 	}
-
 	// Construct diagram
 	FortuneAlgorithm algorithm(points);
 	algorithm.construct();
@@ -1235,7 +1743,9 @@ void criaVoronoi(int n)
 	osg::Geometry* linesGeom;
 	osg::Vec3Array* vertices;
 	grpVoronoi = new osg::Group;
+	grpVoronoi->setName("grpVoronoi");
 	grpCidades = new osg::Group;
+	grpCidades->setName("grpCidades");
 	for (std::size_t i = 0; i < diagram.getNbSites(); ++i)
 	{
 		const VoronoiDiagram::Site* site = diagram.getSite(i);
@@ -1244,12 +1754,6 @@ void criaVoronoi(int n)
 		VoronoiDiagram::HalfEdge* halfEdge = face->outerComponent;
 		if (halfEdge == nullptr)
 			continue;
-		/*while (halfEdge->prev != nullptr) // estava no código original, não parece servir pra nada
-		{
-			halfEdge = halfEdge->prev;
-			if (halfEdge == face->outerComponent)
-				break;
-		}*/
 		VoronoiDiagram::HalfEdge* start = halfEdge;
 		int lados = 0;
 		float minX=lonMax, maxX=lonMin, minY=latMax, maxY=latMin; // Bounding Box deste site
@@ -1316,8 +1820,8 @@ void criaVoronoi(int n)
 			osg::AutoTransform* at = new osg::AutoTransform;
 			at->setPosition( osg::Vec3(maiorLon,maiorLat,controller->pickDown( osg::Vec3d(maiorLon,maiorLat,1) )+0.2) );
 			at->setAutoRotateMode(osg::AutoTransform::ROTATE_TO_SCREEN);
-			at->setAutoScaleToScreen(false);
-			at->setMinimumScale(1);
+			at->setAutoScaleToScreen(true);
+			at->setMinimumScale(1); // ?? Não entendi como isso funciona
 			at->setMaximumScale(2);
 			at->addChild(createLabel(osg::Vec3(0,0,0),0.25,maiorNome,osgText::Text::XY_PLANE));
 			at->setName("AT-Nome da cidade");
@@ -1330,8 +1834,6 @@ void criaVoronoi(int n)
 				Vector2 origin = halfEdge->origin->point;
 				Vector2 dest = halfEdge->destination->point;
 				
-				//std::cout << origin.x << " " << origin.y << " " << dest.x << " " << dest.y << "\n";
-
 				// Linhas sobre o mapa
 				shpGeode = new osg::Geode();
 				linesGeom = new osg::Geometry();
@@ -1358,8 +1860,35 @@ void criaVoronoi(int n)
 	}
 }
 
+// https://stackoverflow.com/a/868894/1086511
+class InputParser
+{
+public:
+	InputParser (int &argc, char **argv)
+	{
+		for (int i=1; i < argc; ++i)
+			this->tokens.push_back(std::string(argv[i]));
+	}
+	const std::string& getCmdOption(const std::string &option) const
+	{
+		std::vector<std::string>::const_iterator itr;
+		itr =  std::find(this->tokens.begin(), this->tokens.end(), option);
+		if (itr != this->tokens.end() && ++itr != this->tokens.end())
+			return *itr;
+		static const std::string empty_string("");
+		return empty_string;
+	}
+	bool cmdOptionExists(const std::string &option) const
+	{
+		return std::find(this->tokens.begin(), this->tokens.end(), option) != this->tokens.end();
+	}
+private:
+	std::vector <std::string> tokens;
+};
+
 int main( int argc, char** argv )
 {
+	read_png_file("br.png");
 	// cria arquivo de log
 	mkdir("log", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH); // cria a pasta log, se não existir
 	time_t t = time(nullptr);
@@ -1370,12 +1899,44 @@ int main( int argc, char** argv )
 	logFileName = "log/log_"+t_str+".txt";
 	// começa o programa
 	log("Começou");
+	
+	InputParser input(argc, argv);
+	if( input.cmdOptionExists("-h") )
+	{
+		std::cout << "SimNation beta, um simulador nacional de políticas socioambientais e socioeconômicas.\n";
+		std::cout << "Como usar: sn [opções...]\n\n";
+		std::cout << "Opções:\n";
+		std::cout << "	-h		Mostra esta mensagem\n";
+		std::cout << "	-n N		N = Número de células de voronoi [2..1000, padrão 200]\n";
+		std::cout << "			(quanto mais células, mais cidades serão mostradas)\n";
+		std::cout << "	-v N		N = velocidade do OVNI [1..50, padrão 10]\n";
+		return 1;
+	}
+	if( input.cmdOptionExists("-n") )
+	{
+		nVoronoi = atoi(input.getCmdOption("-n").c_str());
+		if( nVoronoi < 2)
+			nVoronoi = 2;
+		else
+		if( nVoronoi > 1000)
+			nVoronoi = 1000;
+	}
+	if( input.cmdOptionExists("-v") )
+	{
+		ovniSpeed = atoi(input.getCmdOption("-v").c_str());
+		if( ovniSpeed < 1)
+			ovniSpeed = 1;
+		else
+		if( ovniSpeed > 50)
+			ovniSpeed = 50;
+	}
+	
 	std::srand(std::time(0));
-	getLocais();
 	getCidades();
 	blocos = new osg::Group;
+	blocos->setName("grpBlocos");
 	osg::ref_ptr<osg::Group> root = new osg::Group;
-	root->setName("root");
+	root->setName("grpRoot");
 	osg::ref_ptr<osg::Node> BRnode = osgDB::readNodeFile("BR.osgb");
 	BRnode->setName("Terreno");
 	root->addChild( BRnode );
@@ -1395,7 +1956,7 @@ int main( int argc, char** argv )
 	osgViewer::ViewerBase::Cameras cameras;
 	viewer.getCameras(cameras);
 	osg::Camera* camera = cameras[0];
-	camera->setName("camera");
+	camera->setName("cameraMain");
 	// Posição inicial da câmera
 	osg::Quat quad0;
 	controller->setTransformation(osg::Vec3(lonC,latC,rCeu), quad0 ); // camLon (-74-34.8)/2 = -54.4, camLat (5.3333333-33.8666667)/2 = -14.2666667, camAlt = 80
@@ -1426,7 +1987,7 @@ int main( int argc, char** argv )
 	crossGeode->addDrawable(linesGeom);
 	crossGeode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED); // With lighting off, geometry color ignores the viewing angle
 	// Texto do HUD
-	text = createText(osg::Vec3(10, windowH-30, 0), "", windowW/64);
+	text = createText(osg::Vec3(10, windowH-30, -0.5f), "", windowW/64); // com 0 no final o menu tampa, com 0.1 ou 1 no final não aparece na tela, com -1 no final aparece atrás do menu
 	osg::ref_ptr<osg::Geode> textGeode = new osg::Geode;
 	textGeode->addDrawable( text );
 	osg::ref_ptr<osg::Camera> hudCamera = createHUDCamera(0, windowW, 0, windowH); // cria um HUD do tamanho da janela, não mais 800x600 (piorou o desempenho?)
@@ -1438,9 +1999,49 @@ int main( int argc, char** argv )
 	hudCamera->addChild( textGeode.get() );
 	root->addChild( hudCamera.get() );
 	// voronoi para selecionar maiores cidades de cada região
-	criaVoronoi(200);
+	criaVoronoi(nVoronoi);
 	root->addChild( grpVoronoi );
 	root->addChild( grpCidades );
+
+	// insere vaca
+	/*osg::ref_ptr<osg::Node> vaca = osgDB::readRefNodeFile("cow.osg"); // vem com o Images/reflect.rgb
+	vaca->setName("nodeVaca");
+	osg::ref_ptr<osg::MatrixTransform> trVaca = new osg::MatrixTransform;
+	trVaca->setMatrix( osg::Matrix::scale( 0.1, 0.1, 0.1 ) *
+						osg::Matrix::translate( osg::Vec3(lonC, latC, controller->pickDown( osg::Vec3(lonC,latC,1) )+0.3 ) ) );
+	trVaca->getOrCreateStateSet()->setMode( GL_NORMALIZE, osg::StateAttribute::ON );
+	trVaca->getOrCreateStateSet()->setMode( GL_LIGHTING, osg::StateAttribute::ON );
+	trVaca->setName("trVaca");
+	trVaca->addChild( vaca );
+	root->addChild(trVaca);*/
+
+	grpHidreletrica = new osg::Group;
+	grpHidreletrica->setName("grpHidreletrica");
+	grpHidreletrica->setNodeMask(0); // começa invisível
+
+	grpIndigena = new osg::Group;
+	grpIndigena->setName("grpIndígena");
+	grpIndigena->setNodeMask(0); // começa invisível
+
+	getLocais();
+	
+	std::cout << "Nº hidrelétricas: " << std::to_string( grpHidreletrica->getNumChildren() ) << "\n";
+	std::cout << "Nº terras indígenas: " << std::to_string( grpIndigena->getNumChildren() ) << "\n";
+	
+	root->addChild( grpHidreletrica );
+	root->addChild( grpIndigena );
+	
+	// cria cubo com textura
+	
+	/*osg::ref_ptr<osg::Geometry> cubo = criaCubo();
+	osg::ref_ptr<osg::MatrixTransform> mtCubo = new osg::MatrixTransform;
+	mtCubo->setMatrix( osg::Matrix::scale( 0.5, 0.5, 0.5 ) *
+		osg::Matrix::translate( osg::Vec3(lonC, latC, 1) ) );
+	mtCubo->getOrCreateStateSet()->setMode( GL_NORMALIZE, osg::StateAttribute::ON );
+	mtCubo->setName("mtCubo");
+	mtCubo->addChild( cubo );
+	root->addChild( mtCubo );*/
+
 	while ( !viewer.done() )
 	{
 		calcAcc( &viewer );
@@ -1455,4 +2056,4 @@ int main( int argc, char** argv )
 	return 0;
 }
 
-// g++ terreno1.cpp -losg -losgDB -losgGA -losgText -losgUtil -losgViewer -o terreno1
+// g++ terreno1.cpp -lpng16 -losg -losgDB -losgGA -losgText -losgUtil -losgViewer -o terreno1
