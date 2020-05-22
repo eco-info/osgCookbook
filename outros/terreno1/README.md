@@ -136,12 +136,36 @@ Para as cidades, um diagrama de Voronoi é montado no início do programa, e ape
 
 ### Procurar nomes dos locais também nas quadrículas ao redor da quadrícula atual
 
-Feito. Está dando `Segmentation fault` ocasionalmente, quando o mouse passa perto da borda do mapa e a câmera está perto do chão. Vou criar um sistema de log para investigar melhor as causas.
+Feito.
+
+### Criar sistema de log
+
+Criado, mas ainda não usado.
+
+### Aceitar parâmetros na linha de comando
+
+Criado.
+
+`./terreno1 -h` mostra as opções disponíveis.
+
+### Usar outras fontes no HUD
+
+Por hora só a fonte Charter.ttf.
+
+### Acrescentar ícones no mapa para diversos tipos de locais/estruturas, e botões no menu para mostrá-los/escondê-los
+
+Criado para hidrelétricas e terras indígenas. Cada item pode ser ligado e desligado independente dos demais.
+
+Usinas hidrelétricas:
+
+![](terr1l2.jpg)
+
+Terras indígenas:
+
+![](terr1l1.jpg)
 
 ## Prioridade 1
 
-- Criar sistema de log
-- Aceitar parâmetros na linha de comando
 - Compilar estaticamente para testar em outras máquinas, onde o OSG não esteja instalado.
 - Acrescentar elementos ao HUD (imagens, menus, botões, inputs, etc)
 - Modificar a textura do mapa dinamicamente
@@ -149,8 +173,8 @@ Feito. Está dando `Segmentation fault` ocasionalmente, quando o mouse passa per
 
 ## Prioridade 2
 
+- Criar objetos 3d com textura e selecionáveis
 - Usar teclas PageUp para ganhar altitude, e PageDown para perder altitude
 - Usar teclas Shift para acelerar
 - Usar botão direito do mouse (?) para navegar na mesma altitude
 - Usar teclas QE para girar ao redor do eixo vertical (do mundo, não da câmera -- pois não há roll). Embora os movimentos horizontais do mouse já façam isso, pode fazer mais rápido, e também pode ser útil no MODO B
-- Usar outras fontes no HUD
