@@ -56,6 +56,7 @@
  * Tirar cidades menores que X habitantes ??
  * Investigar memory leaks
  * Investigar bottlenecks de desempenho e como melhorá-los (osgUtil::Optimizer ??)
+	* Cookbook, p. 347: Speeding up the scene intersections
  * Nomes das cidades sumindo atrás do terreno montanhoso (mostrar no HUD com coordenadas globais?)
 
 // https://groups.google.com/forum/#!searchin/osg-users/displaying$20icons|sort:relevance/osg-users/3hXkQ5jXo9I/Vaepg8TrFV8J
@@ -416,16 +417,21 @@ osg::ref_ptr<osg::Group> grpVoronoi;
 osg::ref_ptr<osg::Group> grpCidades;
 osg::ref_ptr<osg::Group> grpHidreletrica;
 osg::ref_ptr<osg::Group> grpIndigena;
+osg::ref_ptr<osg::Group> grpPorto;
+osg::ref_ptr<osg::Group> grpMineracao;
 osg::Geode* selecionado = nullptr;
 osg::ref_ptr<osg::Billboard> geodeHidreletrica;
 osg::ref_ptr<osg::Billboard> geodeIndigena;
-//osg::ref_ptr<osg::MatrixTransform> mtHidreletrica;
+osg::ref_ptr<osg::Billboard> geodePorto;
+osg::ref_ptr<osg::Billboard> geodeMineracao;
 osgUtil::PrintVisitor pv( std::cout );
 int nVoronoi = 200;
 float ovniSpeed = 10;
 osg::ref_ptr<osg::Geode> botaoHover;
 bool hoverHidreletrica = false;
 bool hoverIndigena = false;
+bool hoverPorto = false;
+bool hoverMineracao = false;
 
 bool FileExists(std::string strFilename)
 {
@@ -541,7 +547,7 @@ bool FileExists(std::string strFilename)
 	return geom.release();
 }*/
 
-// cria textura para Hidrelétricas, ...
+// cria textura para Hidrelétricas, terras indígenas...
 float escalaIcone = 0.2; // com imagem "icons/*.png" de 512x512 pixels
 
 osg::Geometry* createQuad(const char* fName, const char* name)
@@ -603,6 +609,8 @@ void getLocais(void)
 			// cria símbolos das hidrelétricas, terras indígenas...
 			osg::Geometry* quadHidreletrica = createQuad("icons/hidreletrica.png","QuadHidrelétrica");
 			osg::Geometry* quadIndigena = createQuad("icons/indigena.png","QuadIndígena");
+			osg::Geometry* quadPorto = createQuad("icons/porto.png","QuadPorto");
+			osg::Geometry* quadMineracao = createQuad("icons/mineracao.png","QuadMineracao");
 
 			std::getline(flocais,linha); // pula a linha de título
 			while (!flocais.eof())
@@ -650,7 +658,28 @@ void getLocais(void)
 					ss->setRenderingHint( osg::StateSet::TRANSPARENT_BIN );
 					grpIndigena->addChild( geodeIndigena );
 				}
-				
+				else
+				if( nomeClasse == "complexo_portuario" )
+				{
+					geodePorto = new osg::Billboard;
+					geodePorto->setMode( osg::Billboard::POINT_ROT_EYE );
+					geodePorto->setName(nome);
+					geodePorto->addDrawable( quadPorto, osg::Vec3( lon, lat, controller->pickDown( osg::Vec3d(lon,lat,1) )+escalaIcone/2 ) );
+					osg::StateSet* ss = geodePorto->getOrCreateStateSet();
+					ss->setRenderingHint( osg::StateSet::TRANSPARENT_BIN );
+					grpPorto->addChild( geodePorto );
+				}
+				else
+				if( nomeClasse == "ext_mineral" )
+				{
+					geodeMineracao = new osg::Billboard;
+					geodeMineracao->setMode( osg::Billboard::POINT_ROT_EYE );
+					geodeMineracao->setName(nome);
+					geodeMineracao->addDrawable( quadMineracao, osg::Vec3( lon, lat, controller->pickDown( osg::Vec3d(lon,lat,1) )+escalaIcone/2 ) );
+					osg::StateSet* ss = geodeMineracao->getOrCreateStateSet();
+					ss->setRenderingHint( osg::StateSet::TRANSPARENT_BIN );
+					grpMineracao->addChild( geodeMineracao );
+				}
 				// insere local nos mapas de busca
 				intlat = floor(lat);
 				intlon = floor(lon);
@@ -1096,6 +1125,8 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 		{
 			hoverHidreletrica = false;
 			hoverIndigena = false;
+			hoverPorto = false;
+			hoverMineracao = false;
 			osgUtil::LineSegmentIntersector::Intersections::iterator hitr = intersections.begin();
 			while( hitr != intersections.end() && hitr->drawable->getName().compare("GeometryMenu") != 0 ) // procura menu
 			{
@@ -1126,6 +1157,20 @@ std::string OVNIController::pick(osgViewer::View* view, const osgGA::GUIEventAda
 								hoverIndigena = true;
 								botaoHover = dynamic_cast<osg::Geode*>(*hitNode);
 								return "Botão: Terra Indígena";
+							}
+							else
+							if ( (*hitNode)->getName().compare("Porto") == 0 )
+							{
+								hoverPorto = true;
+								botaoHover = dynamic_cast<osg::Geode*>(*hitNode);
+								return "Botão: Porto";
+							}
+							else
+							if ( (*hitNode)->getName().compare("Mineração") == 0 )
+							{
+								hoverMineracao = true;
+								botaoHover = dynamic_cast<osg::Geode*>(*hitNode);
+								return "Botão: Mineração";
 							}
 						}
 					}
@@ -1295,6 +1340,8 @@ bool OVNIController::handleMousePush(const osgGA::GUIEventAdapter &ea, osgGA::GU
 {
 	flushMouseEventStack();
 	addMouseEvent( ea );
+	if (!mouseFree)
+		return false;
 	unsigned int buttonMask = _ga_t0->getButtonMask();
 	if( hoverHidreletrica && buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON ) // clicou no botão da hidrelétrica
 	{
@@ -1308,7 +1355,19 @@ bool OVNIController::handleMousePush(const osgGA::GUIEventAdapter &ea, osgGA::GU
 		botaoHover->getOrCreateStateSet()->setMode(GL_BLEND, !botaoHover->getOrCreateStateSet()->getMode(GL_BLEND)); // inverte a transparência
 	}
 	else
-	if( selecionado && mouseFree )
+	if( hoverPorto && buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON ) // clicou no botão do porto
+	{
+		grpPorto->setNodeMask(!grpPorto->getNodeMask());
+		botaoHover->getOrCreateStateSet()->setMode(GL_BLEND, !botaoHover->getOrCreateStateSet()->getMode(GL_BLEND)); // inverte a transparência
+	}
+	else
+	if( hoverMineracao && buttonMask == osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON ) // clicou no botão da mineração
+	{
+		grpMineracao->setNodeMask(!grpMineracao->getNodeMask());
+		botaoHover->getOrCreateStateSet()->setMode(GL_BLEND, !botaoHover->getOrCreateStateSet()->getMode(GL_BLEND)); // inverte a transparência
+	}
+	else
+	if( selecionado )
 	{
 		osg::ShapeDrawable* shpDrb = dynamic_cast<osg::ShapeDrawable*>(selecionado->getChild(0));
 		if (shpDrb)
@@ -1634,6 +1693,8 @@ void criaMenus() // examples/osggeometry/osggeometry.cpp
 	menu->setPosition(osg::Vec3d(0,windowH,-0.6f)); // com 1 no final não aparece na tela; com -1 no final não aparece no pick, com 0 no final o texto não aparece sobre o menu !!
 	menu->addChild( criaBotao("icons/hidreletrica.png", "Hidrelétrica", 0) );
 	menu->addChild( criaBotao("icons/indigena.png", "Terra Indígena", 1) );
+	menu->addChild( criaBotao("icons/porto.png", "Porto", 2) );
+	menu->addChild( criaBotao("icons/mineracao.png", "Mineração", 3) );
 	menu->addChild(geode);
 	menu->setName("patMenu");
 }
@@ -1933,11 +1994,13 @@ int main( int argc, char** argv )
 	
 	std::srand(std::time(0));
 	getCidades();
+	log("Carregou as cidades");
 	blocos = new osg::Group;
 	blocos->setName("grpBlocos");
 	osg::ref_ptr<osg::Group> root = new osg::Group;
 	root->setName("grpRoot");
 	osg::ref_ptr<osg::Node> BRnode = osgDB::readNodeFile("BR.osgb");
+	log("Carregou o terreno");
 	BRnode->setName("Terreno");
 	root->addChild( BRnode );
 	root->addChild( blocos );
@@ -1945,14 +2008,19 @@ int main( int argc, char** argv )
 	Sol = createLightSource( 0, posSol, osg::Vec4(0.8f,0.8f,0.8f,1.0f) );
 	root->getOrCreateStateSet()->setMode( GL_LIGHT0, osg::StateAttribute::ON );
 	root->addChild( Sol );
+	log("Carregou o Sol");
 	// Viewer
 	osgViewer::Viewer viewer;
 	viewer.setSceneData( root.get() );
+	log("Criou o viewer");
 	controller = new OVNIController(&viewer);
+	log("Criou o controller");
 	viewer.setCameraManipulator(controller);
+	log("Ligou o controller no viewer");
 	if( argc > 1 && strcmp( argv[1], "j" ) == 0 )
 		viewer.setUpViewInWindow(0, 0, 800, 600); // deprecated? osgViewer::View::apply( ViewConfig* config )
 	viewer.realize();
+	log("viewer.realize");
 	osgViewer::ViewerBase::Cameras cameras;
 	viewer.getCameras(cameras);
 	osg::Camera* camera = cameras[0];
@@ -1960,6 +2028,7 @@ int main( int argc, char** argv )
 	// Posição inicial da câmera
 	osg::Quat quad0;
 	controller->setTransformation(osg::Vec3(lonC,latC,rCeu), quad0 ); // camLon (-74-34.8)/2 = -54.4, camLat (5.3333333-33.8666667)/2 = -14.2666667, camAlt = 80
+	log("Iniciou a câmera");
 	// Detecta coordenadas da janela
 	osgViewer::Viewer::Windows windows;
 	viewer.getWindows(windows);
@@ -1967,7 +2036,10 @@ int main( int argc, char** argv )
 	(*window)->useCursor(false);
 	(*window)->getWindowRectangle(windowX, windowY, windowW, windowH);
 	std::cout << "Tamanho da janela: " << windowW << "x" << windowH << "\n";
+	log("Tamanho da janela: "+std::to_string(windowW)+"x"+std::to_string(windowH));
 	// Linhas do HUD (examples/osggeometry/osggeometry.cpp)
+	osg::ref_ptr<osg::Camera> hudCamera = createHUDCamera(0, windowW, 0, windowH); // cria um HUD do tamanho da janela, não mais 800x600 (piorou o desempenho?)
+	log("Criou o HUD");
 	crossGeode = new osg::Geode();
 	osg::Geometry* linesGeom = new osg::Geometry();
 	osg::Vec3Array* vertices = new osg::Vec3Array(4);
@@ -1986,20 +2058,25 @@ int main( int argc, char** argv )
 	linesGeom->addPrimitiveSet(new osg::DrawArrays(osg::PrimitiveSet::LINES,0,4));
 	crossGeode->addDrawable(linesGeom);
 	crossGeode->getOrCreateStateSet()->setMode(GL_LIGHTING, osg::StateAttribute::OFF | osg::StateAttribute::PROTECTED); // With lighting off, geometry color ignores the viewing angle
+	hudCamera->addChild( crossGeode.get() );
+	log("Criou a cruz do HUD");
 	// Texto do HUD
 	text = createText(osg::Vec3(10, windowH-30, -0.5f), "", windowW/64); // com 0 no final o menu tampa, com 0.1 ou 1 no final não aparece na tela, com -1 no final aparece atrás do menu
 	osg::ref_ptr<osg::Geode> textGeode = new osg::Geode;
 	textGeode->addDrawable( text );
-	osg::ref_ptr<osg::Camera> hudCamera = createHUDCamera(0, windowW, 0, windowH); // cria um HUD do tamanho da janela, não mais 800x600 (piorou o desempenho?)
-	hudCamera->addChild( crossGeode.get() );
+	hudCamera->addChild( textGeode.get() );
+	log("Criou o texto do HUD");
 	criaBussola();
+	log("Criou a bússola");
 	criaMenus();
+	log("Criou o menu");
 	hudCamera->addChild( bussola );
 	hudCamera->addChild( menu );
-	hudCamera->addChild( textGeode.get() );
 	root->addChild( hudCamera.get() );
+	log("Adicionou o HUD ao projeto");
 	// voronoi para selecionar maiores cidades de cada região
 	criaVoronoi(nVoronoi);
+	log("Criou as células de Voronoi");
 	root->addChild( grpVoronoi );
 	root->addChild( grpCidades );
 
@@ -2023,13 +2100,26 @@ int main( int argc, char** argv )
 	grpIndigena->setName("grpIndígena");
 	grpIndigena->setNodeMask(0); // começa invisível
 
+	grpPorto = new osg::Group;
+	grpPorto->setName("grpPorto");
+	grpPorto->setNodeMask(0); // começa invisível
+
+	grpMineracao = new osg::Group;
+	grpMineracao->setName("grpMineracao");
+	grpMineracao->setNodeMask(0); // começa invisível
+
 	getLocais();
+	log("Criou os locais");
 	
 	std::cout << "Nº hidrelétricas: " << std::to_string( grpHidreletrica->getNumChildren() ) << "\n";
 	std::cout << "Nº terras indígenas: " << std::to_string( grpIndigena->getNumChildren() ) << "\n";
+	std::cout << "Nº portos: " << std::to_string( grpPorto->getNumChildren() ) << "\n";
+	std::cout << "Nº pontos de extração mineral: " << std::to_string( grpMineracao->getNumChildren() ) << "\n";
 	
 	root->addChild( grpHidreletrica );
 	root->addChild( grpIndigena );
+	root->addChild( grpPorto );
+	root->addChild( grpMineracao );
 	
 	// cria cubo com textura
 	
@@ -2042,6 +2132,7 @@ int main( int argc, char** argv )
 	mtCubo->addChild( cubo );
 	root->addChild( mtCubo );*/
 
+	log("Preparando para entrar no loop principal");
 	while ( !viewer.done() )
 	{
 		calcAcc( &viewer );
